@@ -21,6 +21,96 @@ import type {
   Provider,
 } from "./types";
 
+const PROVIDER_FILTERS = [
+  { value: ALL_PROVIDERS, label: "All" },
+  { value: "codex", label: "Codex" },
+  { value: "claude", label: "Claude" },
+] as const;
+
+function profileCredentialClass(profile: Profile): string {
+  if (profile.active) {
+    return "status-chip status-chip--active";
+  }
+  if (profile.credentialPresent) {
+    return "status-chip status-chip--ready";
+  }
+  if (profile.configured) {
+    return "status-chip status-chip--warning";
+  }
+  return "status-chip";
+}
+
+function profileSourceLabel(profile: Profile): string {
+  if (profile.source === "manifest") {
+    return "Manifest";
+  }
+  if (profile.source === "profile-metadata") {
+    return "Local metadata";
+  }
+  return "Profile directory";
+}
+
+function desktopButtonLabel(
+  active: boolean,
+  activating: boolean,
+  eligible: boolean,
+): string {
+  if (active) {
+    return "GPT app active";
+  }
+  if (activating) {
+    return "Switching GPT app…";
+  }
+  return eligible ? "Use in GPT app" : "GPT login required";
+}
+
+function cliButtonLabel(active: boolean, activating: boolean): string {
+  if (active) {
+    return "CLI active";
+  }
+  return activating ? "Activating…" : "Use in CLI";
+}
+
+function DesktopProfileAction({
+  desktop,
+  desktopActivating,
+  onActivateDesktop,
+  profile,
+}: {
+  desktop: DesktopAppStatus | null;
+  desktopActivating: string;
+  onActivateDesktop: (profile: Profile) => Promise<void>;
+  profile: Profile;
+}) {
+  if (profile.provider !== "codex" || !desktop?.platformSupported) {
+    return null;
+  }
+
+  const key = `${profile.provider}:${profile.profilePath}`;
+  const eligible = desktopEligible(profile, desktop);
+  const active = desktopActive(profile, desktop);
+  const activating = desktopActivating === key;
+  const disabled =
+    active ||
+    !desktop.installed ||
+    !desktop.fileActivationSupported ||
+    !eligible ||
+    desktop.rollbackAvailable ||
+    Boolean(desktopActivating);
+
+  return (
+    <button
+      className="button button--desktop"
+      disabled={disabled}
+      onClick={() => void onActivateDesktop(profile)}
+      title={desktop.message}
+      type="button"
+    >
+      {desktopButtonLabel(active, activating, eligible)}
+    </button>
+  );
+}
+
 function ProfileCard({
   activating,
   desktop,
@@ -37,15 +127,7 @@ function ProfileCard({
   profile: Profile;
 }) {
   const key = `${profile.provider}:${profile.profilePath}`;
-  const eligibleForDesktop = desktopEligible(profile, desktop);
-  const activeInDesktop = desktopActive(profile, desktop);
-  const credentialClass = profile.active
-    ? "status-chip status-chip--active"
-    : profile.credentialPresent
-      ? "status-chip status-chip--ready"
-      : profile.configured
-        ? "status-chip status-chip--warning"
-        : "status-chip";
+  const cliActivating = activating === key;
 
   return (
     <article className={`profile-card profile-card--${profile.provider}`}>
@@ -56,7 +138,9 @@ function ProfileCard({
           </p>
           <h2>{profile.name}</h2>
         </div>
-        <span className={credentialClass}>{credentialLabel(profile)}</span>
+        <span className={profileCredentialClass(profile)}>
+          {credentialLabel(profile)}
+        </span>
       </div>
 
       <dl className="profile-details">
@@ -77,38 +161,14 @@ function ProfileCard({
       </dl>
 
       <div className="profile-card__footer">
-        <span className="source-label">
-          {profile.source === "manifest"
-            ? "Manifest"
-            : profile.source === "profile-metadata"
-              ? "Local metadata"
-              : "Profile directory"}
-        </span>
+        <span className="source-label">{profileSourceLabel(profile)}</span>
         <div className="actions">
-          {profile.provider === "codex" && desktop?.platformSupported ? (
-            <button
-              className="button button--desktop"
-              disabled={
-                activeInDesktop ||
-                !desktop.installed ||
-                !desktop.fileActivationSupported ||
-                !eligibleForDesktop ||
-                desktop.rollbackAvailable ||
-                Boolean(desktopActivating)
-              }
-              onClick={() => void onActivateDesktop(profile)}
-              title={desktop.message}
-              type="button"
-            >
-              {activeInDesktop
-                ? "GPT app active"
-                : desktopActivating === key
-                  ? "Switching GPT app…"
-                  : eligibleForDesktop
-                    ? "Use in GPT app"
-                    : "GPT login required"}
-            </button>
-          ) : null}
+          <DesktopProfileAction
+            desktop={desktop}
+            desktopActivating={desktopActivating}
+            onActivateDesktop={onActivateDesktop}
+            profile={profile}
+          />
           <button
             className="button button--primary"
             disabled={
@@ -120,15 +180,131 @@ function ProfileCard({
             onClick={() => void onActivate(profile)}
             type="button"
           >
-            {profile.active
-              ? "CLI active"
-              : activating === key
-                ? "Activating…"
-                : "Use in CLI"}
+            {cliButtonLabel(profile.active, cliActivating)}
           </button>
         </div>
       </div>
     </article>
+  );
+}
+
+function DesktopStatusPanel({
+  desktop,
+  desktopActivating,
+  onConfirm,
+  onRollback,
+}: {
+  desktop: DesktopAppStatus | null;
+  desktopActivating: string;
+  onConfirm: () => Promise<void>;
+  onRollback: () => Promise<void>;
+}) {
+  if (!desktop?.platformSupported) {
+    return null;
+  }
+
+  let runtimeStatus = "";
+  if (desktop.installed) {
+    runtimeStatus = desktop.running ? " · Running" : " · Stopped";
+  }
+
+  return (
+    <output className="message message--desktop">
+      <strong>Windows GPT app</strong>
+      <span>
+        {desktop.message}
+        {runtimeStatus}
+      </span>
+      {desktop.rollbackAvailable ? (
+        <div className="desktop-confirmation">
+          <span>
+            Check the account and workspace in the GPT app before keeping this
+            login.
+          </span>
+          <div className="actions">
+            <button
+              className="button button--primary"
+              disabled={Boolean(desktopActivating)}
+              onClick={() => void onConfirm()}
+              type="button"
+            >
+              {desktopActivating === "__confirm__"
+                ? "Keeping…"
+                : "Keep this login"}
+            </button>
+            <button
+              className="button"
+              disabled={Boolean(desktopActivating)}
+              onClick={() => void onRollback()}
+              type="button"
+            >
+              {desktopActivating === "__rollback__"
+                ? "Restoring…"
+                : "Undo switch"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </output>
+  );
+}
+
+function ProfileResults({
+  activating,
+  desktop,
+  desktopActivating,
+  loading,
+  onActivate,
+  onActivateDesktop,
+  profiles,
+}: {
+  activating: string;
+  desktop: DesktopAppStatus | null;
+  desktopActivating: string;
+  loading: boolean;
+  onActivate: (profile: Profile) => Promise<void>;
+  onActivateDesktop: (profile: Profile) => Promise<void>;
+  profiles: Profile[];
+}) {
+  if (loading) {
+    return (
+      <section className="loading-state" aria-live="polite">
+        <span className="spinner" />
+        Scanning Codex and Claude profile stores…
+      </section>
+    );
+  }
+
+  if (!profiles.length) {
+    return (
+      <section className="empty-state">
+        <div className="empty-state__icon" aria-hidden="true">
+          &gt;_
+        </div>
+        <h2>No matching local profiles</h2>
+        <p>
+          Set up Codex or Claude profiles with workBenches, then scan again. The
+          switcher also recognizes credential-bearing profile directories when
+          no manifest is available.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="profile-grid" aria-label="Local profiles">
+      {profiles.map((profile) => (
+        <ProfileCard
+          activating={activating}
+          desktop={desktop}
+          desktopActivating={desktopActivating}
+          key={`${profile.provider}:${profile.profilePath}`}
+          onActivate={onActivate}
+          onActivateDesktop={onActivateDesktop}
+          profile={profile}
+        />
+      ))}
+    </section>
   );
 }
 
@@ -243,7 +419,9 @@ export default function App() {
         "The GPT app login was kept and its rollback copy was removed.",
       );
     } catch (reason) {
-      setError(String(reason));
+      const message = String(reason);
+      await loadProfiles();
+      setError(message);
     } finally {
       setDesktopActivating("");
     }
@@ -327,11 +505,7 @@ export default function App() {
           />
         </label>
         <div className="family-tabs" role="group" aria-label="Provider">
-          {[
-            { value: ALL_PROVIDERS, label: "All" },
-            { value: "codex", label: "Codex" },
-            { value: "claude", label: "Claude" },
-          ].map((item) => (
+          {PROVIDER_FILTERS.map((item) => (
             <button
               aria-pressed={provider === item.value}
               className={
@@ -367,86 +541,24 @@ export default function App() {
         </aside>
       ) : null}
 
-      {desktop?.platformSupported ? (
-        <aside className="message message--desktop" role="status">
-          <strong>Windows GPT app</strong>
-          <span>
-            {desktop.message}
-            {desktop.installed
-              ? ` · ${desktop.running ? "Running" : "Stopped"}`
-              : ""}
-          </span>
-          {desktop.rollbackAvailable ? (
-            <div className="desktop-confirmation">
-              <span>
-                Check the account and workspace in the GPT app before keeping
-                this login.
-              </span>
-              <div className="actions">
-                <button
-                  className="button button--primary"
-                  disabled={Boolean(desktopActivating)}
-                  onClick={() => void confirmDesktop()}
-                  type="button"
-                >
-                  {desktopActivating === "__confirm__"
-                    ? "Keeping…"
-                    : "Keep this login"}
-                </button>
-                <button
-                  className="button"
-                  disabled={Boolean(desktopActivating)}
-                  onClick={() => void rollbackDesktop()}
-                  type="button"
-                >
-                  {desktopActivating === "__rollback__"
-                    ? "Restoring…"
-                    : "Undo switch"}
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </aside>
-      ) : null}
+      <DesktopStatusPanel
+        desktop={desktop}
+        desktopActivating={desktopActivating}
+        onConfirm={confirmDesktop}
+        onRollback={rollbackDesktop}
+      />
 
-      {toast ? (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      ) : null}
+      {toast ? <output className="toast">{toast}</output> : null}
 
-      {loading ? (
-        <section className="loading-state" aria-live="polite">
-          <span className="spinner" />
-          Scanning Codex and Claude profile stores…
-        </section>
-      ) : visibleProfiles.length ? (
-        <section className="profile-grid" aria-label="Local profiles">
-          {visibleProfiles.map((profile) => (
-            <ProfileCard
-              activating={activating}
-              desktop={desktop}
-              desktopActivating={desktopActivating}
-              key={`${profile.provider}:${profile.profilePath}`}
-              onActivate={activate}
-              onActivateDesktop={activateDesktop}
-              profile={profile}
-            />
-          ))}
-        </section>
-      ) : (
-        <section className="empty-state">
-          <div className="empty-state__icon" aria-hidden="true">
-            &gt;_
-          </div>
-          <h2>No matching local profiles</h2>
-          <p>
-            Set up Codex or Claude profiles with workBenches, then scan again.
-            The switcher also recognizes credential-bearing profile directories
-            when no manifest is available.
-          </p>
-        </section>
-      )}
+      <ProfileResults
+        activating={activating}
+        desktop={desktop}
+        desktopActivating={desktopActivating}
+        loading={loading}
+        onActivate={activate}
+        onActivateDesktop={activateDesktop}
+        profiles={visibleProfiles}
+      />
 
       <footer className="inventory-footer">
         {(inventory?.stores ?? []).map((store) => (

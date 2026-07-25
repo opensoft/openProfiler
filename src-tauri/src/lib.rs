@@ -118,7 +118,7 @@ fn activate_codex_desktop_profile(
         };
         windows_desktop::launch(&app.app_user_model_id).map_err(|error| {
             format!(
-                "the profile was switched and can be rolled back, but ChatGPT could not be relaunched: {error}"
+                "The profile was switched and can be rolled back, but ChatGPT could not be relaunched: {error}"
             )
         })?;
         Ok(desktop_activation_outcome(activation, true))

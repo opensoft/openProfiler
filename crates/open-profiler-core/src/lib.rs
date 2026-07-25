@@ -343,6 +343,14 @@ struct CodexCredentialIdentity {
     account_id: String,
 }
 
+#[derive(Debug)]
+struct CodexDesktopCredentialState {
+    credential_store: String,
+    target_exists: bool,
+    active_identity: Option<CodexCredentialIdentity>,
+    file_activation_supported: bool,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopRollbackMarker {
@@ -474,18 +482,14 @@ pub fn codex_desktop_status(config: &DiscoveryConfig, desktop_home: &Path) -> Co
         };
     };
 
-    let credential_store = configured_credential_store(desktop_home);
-    let target_exists = desktop_home
-        .join(Provider::Codex.credential_name())
-        .is_file();
-    let active_identity =
-        read_codex_credential_identity(&desktop_home.join(Provider::Codex.credential_name())).ok();
+    let credential_state = codex_desktop_credential_state(desktop_home);
     let profiles = codex_profile_credentials(config, provider_config);
     let mut eligible_profile_paths = profiles
         .iter()
         .map(|profile| profile.profile_path.clone())
         .collect::<Vec<_>>();
-    let mut active_profile_paths = active_identity
+    let mut active_profile_paths = credential_state
+        .active_identity
         .as_ref()
         .map(|identity| {
             profiles
@@ -500,16 +504,10 @@ pub fn codex_desktop_status(config: &DiscoveryConfig, desktop_home: &Path) -> Co
     active_profile_paths.sort();
     active_profile_paths.dedup();
 
-    let file_activation_supported = match credential_store.as_str() {
-        "file" => !target_exists || active_identity.is_some(),
-        "keyring" => false,
-        "auto" | "default" => active_identity.is_some(),
-        _ => false,
-    };
     let message = match (
-        credential_store.as_str(),
-        file_activation_supported,
-        target_exists,
+        credential_state.credential_store.as_str(),
+        credential_state.file_activation_supported,
+        credential_state.target_exists,
     ) {
         ("keyring", _, _) => {
             "Windows Credential Manager is configured; use the supported ChatGPT sign-in flow"
@@ -519,8 +517,11 @@ pub fn codex_desktop_status(config: &DiscoveryConfig, desktop_home: &Path) -> Co
             "No file-based desktop login was found, so Credential Manager cannot be ruled out"
                 .to_string()
         }
-        (_, false, true) => {
+        ("file" | "auto" | "default", false, true) => {
             "The desktop credential is not a complete reusable ChatGPT login".to_string()
+        }
+        ("unknown", _, _) => {
+            "The desktop credential-store mode could not be established".to_string()
         }
         (_, true, _) if eligible_profile_paths.is_empty() => {
             "No reusable ChatGPT profile credentials are available".to_string()
@@ -529,8 +530,8 @@ pub fn codex_desktop_status(config: &DiscoveryConfig, desktop_home: &Path) -> Co
     };
 
     CodexDesktopStatus {
-        file_activation_supported,
-        credential_store,
+        file_activation_supported: credential_state.file_activation_supported,
+        credential_store: credential_state.credential_store,
         eligible_profile_paths,
         active_profile_paths,
         rollback_available: desktop_rollback_pending(desktop_home),
@@ -562,11 +563,28 @@ pub fn activate_codex_desktop_profile(
             profile: requested_profile_path.to_string(),
         })?;
 
-    let status = codex_desktop_status(config, desktop_home);
-    if !status.file_activation_supported {
+    let credential_state = codex_desktop_credential_state(desktop_home);
+    if !credential_state.file_activation_supported {
+        let reason = match (
+            credential_state.credential_store.as_str(),
+            credential_state.target_exists,
+        ) {
+            ("keyring", _) => {
+                "Windows Credential Manager is configured; use the supported ChatGPT sign-in flow"
+                    .to_string()
+            }
+            ("auto" | "default", false) => {
+                "No file-based desktop login was found, so Credential Manager cannot be ruled out"
+                    .to_string()
+            }
+            ("file" | "auto" | "default", true) => {
+                "The desktop credential is not a complete reusable ChatGPT login".to_string()
+            }
+            _ => "The desktop credential-store mode could not be established".to_string(),
+        };
         return Err(ProfileError::UnsupportedDesktopCredential {
             path: desktop_home.join(Provider::Codex.credential_name()),
-            reason: status.message,
+            reason,
         });
     }
 
@@ -577,20 +595,31 @@ pub fn activate_codex_desktop_profile(
     reject_symlink(&target)?;
     reject_symlink(&rollback)?;
     reject_symlink(&marker_path)?;
+    remove_regular_file_if_present(&rollback)?;
 
-    let active_identity = if target.is_file() {
-        Some(read_codex_credential_identity(&target)?)
-    } else {
-        None
-    };
+    let previous_credential_present = credential_state.active_identity.is_some();
+    let (backup_size, backup_modified_unix_secs, backup_modified_subsec_nanos) =
+        if previous_credential_present {
+            atomic_copy(&target, &rollback, Provider::Codex, "desktop rollback")?;
+            let rollback_identity = read_codex_credential_identity(&rollback)?;
+            if Some(&rollback_identity) != credential_state.active_identity.as_ref() {
+                return Err(ProfileError::DesktopVerificationFailed);
+            }
+            let (size, modified_secs, modified_nanos) =
+                credential_stamp(&rollback).ok_or(ProfileError::DesktopRollbackUnavailable)?;
+            (Some(size), Some(modified_secs), Some(modified_nanos))
+        } else {
+            (None, None, None)
+        };
+
     let mut outgoing_profiles_updated = 0;
-    if let Some(active_identity) = active_identity {
+    if let Some(active_identity) = credential_state.active_identity {
         for profile in profiles
             .iter()
             .filter(|profile| profile.identity == active_identity)
         {
             atomic_copy(
-                &target,
+                &rollback,
                 &profile.credential_path,
                 Provider::Codex,
                 &profile.name,
@@ -598,17 +627,6 @@ pub fn activate_codex_desktop_profile(
             outgoing_profiles_updated += 1;
         }
     }
-
-    let previous_credential_present = target.is_file();
-    let (backup_size, backup_modified_unix_secs, backup_modified_subsec_nanos) =
-        if previous_credential_present {
-            atomic_copy(&target, &rollback, Provider::Codex, "desktop rollback")?;
-            let (size, modified_secs, modified_nanos) =
-                credential_stamp(&rollback).ok_or(ProfileError::DesktopRollbackUnavailable)?;
-            (Some(size), Some(modified_secs), Some(modified_nanos))
-        } else {
-            (None, None, None)
-        };
 
     let marker = DesktopRollbackMarker {
         schema_version: 1,
@@ -729,10 +747,41 @@ fn codex_profile_credentials(
         .collect()
 }
 
+fn codex_desktop_credential_state(desktop_home: &Path) -> CodexDesktopCredentialState {
+    let credential_store = configured_credential_store(desktop_home);
+    let target = desktop_home.join(Provider::Codex.credential_name());
+    let target_exists = match fs::symlink_metadata(&target) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    };
+    let active_identity = read_codex_credential_identity(&target).ok();
+    let file_activation_supported = match credential_store.as_str() {
+        "file" => !target_exists || active_identity.is_some(),
+        "keyring" => false,
+        "auto" | "default" => active_identity.is_some(),
+        _ => false,
+    };
+
+    CodexDesktopCredentialState {
+        credential_store,
+        target_exists,
+        active_identity,
+        file_activation_supported,
+    }
+}
+
 fn configured_credential_store(desktop_home: &Path) -> String {
     let config_path = desktop_home.join("config.toml");
-    let Ok(config) = read_text(&config_path) else {
-        return "default".to_string();
+    match fs::symlink_metadata(&config_path) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => return "unknown".to_string(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return "default".to_string(),
+        Err(_) => return "unknown".to_string(),
+    }
+    let config = match read_text(&config_path) {
+        Ok(config) => config,
+        Err(_) => return "unknown".to_string(),
     };
 
     config
@@ -1389,10 +1438,13 @@ fn remove_regular_file(path: &Path) -> Result<()> {
 }
 
 fn remove_regular_file_if_present(path: &Path) -> Result<()> {
-    if path.exists() {
-        remove_regular_file(path)
-    } else {
-        Ok(())
+    match fs::symlink_metadata(path) {
+        Ok(_) => remove_regular_file(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ProfileError::Read {
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -1626,6 +1678,52 @@ mod tests {
         assert!(matches!(
             activate_codex_desktop_profile(&config, "work", &codex.active_home),
             Err(ProfileError::UnsupportedDesktopCredential { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_desktop_switching_when_credential_store_config_is_unsafe() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        write_file(
+            &codex.profiles_home.join("profiles/work/auth.json"),
+            &codex_auth("account-work", "work"),
+        );
+        write_file(
+            &codex.active_home.join("auth.json"),
+            &codex_auth("account-work", "desktop"),
+        );
+        symlink(
+            temp.path().join("missing-config.toml"),
+            codex.active_home.join("config.toml"),
+        )
+        .unwrap();
+
+        let status = codex_desktop_status(&config, &codex.active_home);
+        assert_eq!(status.credential_store, "unknown");
+        assert!(!status.file_activation_supported);
+        assert!(matches!(
+            activate_codex_desktop_profile(&config, "work", &codex.active_home),
+            Err(ProfileError::UnsupportedDesktopCredential { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_to_ignore_a_dangling_symlink_during_secure_cleanup() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let dangling = temp.path().join("rollback.json");
+        symlink(temp.path().join("missing-auth.json"), &dangling).unwrap();
+
+        assert!(matches!(
+            remove_regular_file_if_present(&dangling),
+            Err(ProfileError::UnsafeActivationPath(path)) if path == dangling
         ));
     }
 

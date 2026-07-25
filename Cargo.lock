@@ -2027,7 +2027,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "opensoft-profile-core"
+name = "opensoft-open-profiler"
+version = "0.1.0"
+dependencies = [
+ "opensoft-open-profiler-core",
+ "serde",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
+name = "opensoft-open-profiler-core"
 version = "0.1.0"
 dependencies = [
  "dirs",
@@ -2038,16 +2048,6 @@ dependencies = [
  "thiserror 2.0.19",
  "walkdir",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "opensoft-profile-switcher"
-version = "0.1.0"
-dependencies = [
- "opensoft-profile-core",
- "serde",
- "tauri",
- "tauri-build",
 ]
 
 [[package]]

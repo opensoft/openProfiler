@@ -1,9 +1,10 @@
-# Profile Switcher
+# openProfiler
 
-A local-first desktop application for discovering and activating isolated Codex
-and Claude profiles owned by the current user.
+A full LLM profile manager. openProfiler is a local-first desktop application
+for discovering and activating isolated LLM profiles owned by the current user.
+Its current provider integrations support Codex and Claude.
 
-Profile Switcher does not create accounts or store a second credential
+openProfiler does not create accounts or store a second credential
 database. It relies on profile directories created by
 [workBenches](https://github.com/opensoft/workBenches) or another compatible
 setup, then makes one of those local credentials active in the provider's
@@ -20,7 +21,7 @@ standard user home.
 - Activate Codex by atomically replacing `~/.codex/auth.json`.
 - Activate Claude by atomically replacing `~/.claude/.credentials.json`.
 - Record only non-secret active-profile metadata in
-  `.profile-switcher-active.json`.
+  `.openprofiler-active.json`.
 
 Existing Codex or Claude processes may cache their login. Close and reopen the
 provider app after activation. This project switches local Codex and Claude Code
@@ -39,15 +40,20 @@ relative to the current user's home directory.
 
 Environment overrides:
 
-| Purpose       | Codex                                                    | Claude                                |
-| ------------- | -------------------------------------------------------- | ------------------------------------- |
-| Manifest      | `CODEX_PROFILES_MANIFEST` or `CHATGPT_PROFILES_MANIFEST` | `CLAUDE_PROFILES_MANIFEST`            |
-| Profile store | `CODEX_PROFILES_HOME` or `CHATGPT_PROFILES_HOME`         | `CLAUDE_PROFILES_HOME`                |
-| Active home   | `PROFILE_SWITCHER_CODEX_ACTIVE_HOME`                     | `PROFILE_SWITCHER_CLAUDE_ACTIVE_HOME` |
+| Purpose       | Codex                                                    | Claude                            |
+| ------------- | -------------------------------------------------------- | --------------------------------- |
+| Manifest      | `CODEX_PROFILES_MANIFEST` or `CHATGPT_PROFILES_MANIFEST` | `CLAUDE_PROFILES_MANIFEST`        |
+| Profile store | `CODEX_PROFILES_HOME` or `CHATGPT_PROFILES_HOME`         | `CLAUDE_PROFILES_HOME`            |
+| Active home   | `OPENPROFILER_CODEX_ACTIVE_HOME`                         | `OPENPROFILER_CLAUDE_ACTIVE_HOME` |
 
 Manifest metadata takes precedence, followed by `.profile.json`, then a
 credential-bearing profile directory. A malformed provider manifest is reported
 without hiding valid profiles from the other provider.
+
+The deprecated `PROFILE_SWITCHER_CODEX_ACTIVE_HOME` and
+`PROFILE_SWITCHER_CLAUDE_ACTIVE_HOME` aliases remain available for compatibility.
+openProfiler also recognizes the legacy `.profile-switcher-active.json` marker,
+but all new activations write `.openprofiler-active.json`.
 
 ## Security model
 
@@ -78,8 +84,8 @@ Prerequisites:
 pnpm install
 pnpm test
 pnpm build
-cargo test -p opensoft-profile-core
-cargo clippy -p opensoft-profile-core --all-targets -- -D warnings
+cargo test -p opensoft-open-profiler-core
+cargo clippy -p opensoft-open-profiler-core --all-targets -- -D warnings
 pnpm tauri dev
 ```
 
@@ -88,7 +94,7 @@ cross-platform icons, CI, Dependabot, security policy, and contribution guide.
 
 ## Compatible metadata
 
-Profile Switcher recognizes workBenches version 1 manifests:
+openProfiler recognizes workBenches version 1 manifests:
 
 ```json
 {

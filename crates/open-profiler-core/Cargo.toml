@@ -1,7 +1,7 @@
 [package]
-name = "opensoft-profile-core"
+name = "opensoft-open-profiler-core"
 version = "0.1.0"
-description = "Secure workBenches Codex and Claude profile discovery and activation"
+description = "Secure LLM profile discovery and activation for openProfiler"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

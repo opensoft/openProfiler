@@ -1,20 +1,20 @@
 [package]
-name = "opensoft-profile-switcher"
+name = "opensoft-open-profiler"
 version = "0.1.0"
-description = "Opensoft desktop profile manager for Codex and workBenches AI accounts"
+description = "A full LLM profile manager"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "opensoft_profile_switcher_lib"
+name = "opensoft_open_profiler_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.5", features = [] }
 
 [dependencies]
-opensoft-profile-core = { path = "../crates/profile-core" }
+opensoft-open-profiler-core = { path = "../crates/open-profiler-core" }
 serde.workspace = true
 tauri = { version = "2.10", features = [] }

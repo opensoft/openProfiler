@@ -172,10 +172,10 @@ export default function App() {
         </div>
         <div className="hero__copy">
           <p className="eyebrow">Local profiles · Codex + Claude</p>
-          <h1>Profile Switcher</h1>
+          <h1>openProfiler</h1>
           <p>
-            Discover workBenches profiles and choose the local identity each
-            provider uses next.
+            Manage local LLM profiles and choose the identity each provider uses
+            next.
           </p>
         </div>
         <div className="privacy-badge">

@@ -15,7 +15,7 @@ report.
 
 ## Credential boundary
 
-Profile Switcher reads profile metadata and checks credential file metadata
+openProfiler reads profile metadata and checks credential file metadata
 during discovery. Activation streams the selected credential directly into the
 provider's local active home. Credential contents must never be returned to the
 webview, logged, displayed, transmitted, committed, or exported.

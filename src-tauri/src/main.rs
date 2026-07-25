@@ -1,3 +1,3 @@
 fn main() {
-    opensoft_profile_switcher_lib::run();
+    opensoft_open_profiler_lib::run();
 }

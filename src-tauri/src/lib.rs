@@ -1,4 +1,4 @@
-use opensoft_profile_core::{
+use opensoft_open_profiler_core::{
     activate_profile as activate, discover_profiles, ActivationResult, DiscoveryConfig,
     ProfileInventory, Provider,
 };
@@ -20,5 +20,5 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![list_profiles, activate_profile])
         .run(tauri::generate_context!())
-        .expect("error while running Profile Switcher");
+        .expect("error while running openProfiler");
 }

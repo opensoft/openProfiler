@@ -756,7 +756,7 @@ fn open_credential_source(path: &Path) -> Result<File> {
         if information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
             return Err(ProfileError::UnsafeActivationPath(path.to_path_buf()));
         }
-        return Ok(file);
+        Ok(file)
     }
 
     #[cfg(not(windows))]

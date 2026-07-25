@@ -1,4 +1,4 @@
-import type { ProfileInventory } from "./types";
+import type { DesktopAppStatus, ProfileInventory } from "./types";
 
 export const devFixtureInventory: ProfileInventory = {
   profiles: [
@@ -58,4 +58,16 @@ export const devFixtureInventory: ProfileInventory = {
       issues: [],
     },
   ],
+};
+
+export const devFixtureDesktopStatus: DesktopAppStatus = {
+  platformSupported: true,
+  installed: true,
+  running: true,
+  fileActivationSupported: true,
+  credentialStore: "file",
+  eligibleProfilePaths: ["company/company-codex"],
+  activeProfilePaths: ["company/company-codex"],
+  rollbackAvailable: false,
+  message: "File-based GPT app profile switching is ready",
 };

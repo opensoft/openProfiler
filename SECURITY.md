@@ -15,11 +15,19 @@ report.
 
 ## Credential boundary
 
-openProfiler reads profile metadata and checks credential file metadata
-during discovery. Activation streams the selected credential directly into the
-provider's local active home. Credential contents must never be returned to the
-webview, logged, displayed, transmitted, committed, or exported.
+openProfiler reads profile metadata and validates credential shape and
+non-secret account identity during desktop eligibility checks. Activation
+streams credentials directly between the selected profile and provider home.
+Credential contents must never be returned to the webview, logged, displayed,
+transmitted, committed, or exported.
 
 Active credential writes must remain atomic and use mode `0600` on Unix. Profile
 roots and activation targets must not cross configured directory boundaries or
 follow attacker-controlled symlinks.
+
+Windows GPT app activation must stop the packaged app before touching its
+credential, reject keyring-authoritative or incomplete credentials, preserve the
+destination ACL, and verify the installed account identity. The outgoing
+refreshed credential is synchronized only to profiles with the same account ID.
+One rollback credential may remain in the desktop Codex home until the user
+confirms or undoes the switch; it receives the same protection as `auth.json`.

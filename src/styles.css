@@ -406,6 +406,12 @@ code {
   background: #176654;
 }
 
+.button--desktop {
+  border-color: #5272cc;
+  color: #e8edff;
+  background: #283d82;
+}
+
 .message,
 .loading-state,
 .empty-state,
@@ -461,9 +467,24 @@ code {
   color: #eac27f;
 }
 
+.message--desktop {
+  border-color: rgb(98 132 231 / 35%);
+  color: #cbd6ff;
+}
+
 .message span {
   color: #9faeb9;
   font-size: 0.8rem;
+}
+
+.desktop-confirmation {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgb(98 132 231 / 22%);
 }
 
 .loading-state {
@@ -651,6 +672,11 @@ code {
 
   .actions {
     justify-content: flex-start;
+  }
+
+  .desktop-confirmation {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .inventory-footer {

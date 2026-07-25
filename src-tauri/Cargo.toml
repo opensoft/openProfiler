@@ -18,3 +18,11 @@ tauri-build = { version = "2.5", features = [] }
 opensoft-open-profiler-core = { path = "../crates/open-profiler-core" }
 serde.workspace = true
 tauri = { version = "2.10", features = [] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }

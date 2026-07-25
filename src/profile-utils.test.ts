@@ -4,10 +4,13 @@ import {
   activationPayload,
   ALL_PROVIDERS,
   credentialLabel,
+  desktopActivationPayload,
+  desktopActive,
+  desktopEligible,
   filterProfiles,
   providerLabel,
 } from "./profile-utils";
-import type { Profile } from "./types";
+import type { DesktopAppStatus, Profile } from "./types";
 
 const profiles: Profile[] = [
   {
@@ -37,6 +40,18 @@ const profiles: Profile[] = [
     source: "profile-metadata",
   },
 ];
+
+const desktop: DesktopAppStatus = {
+  platformSupported: true,
+  installed: true,
+  running: false,
+  fileActivationSupported: true,
+  credentialStore: "file",
+  eligibleProfilePaths: ["company/work"],
+  activeProfilePaths: ["company/work"],
+  rollbackAvailable: false,
+  message: "ready",
+};
 
 describe("profile utilities", () => {
   it("filters by provider and searchable metadata", () => {
@@ -74,5 +89,15 @@ describe("profile utilities", () => {
       provider: "codex",
       profilePath: "company/work",
     });
+    expect(desktopActivationPayload(profiles[0])).toEqual({
+      profilePath: "company/work",
+    });
+  });
+
+  it("maps desktop eligibility and active identity without tokens", () => {
+    expect(desktopEligible(profiles[0], desktop)).toBe(true);
+    expect(desktopActive(profiles[0], desktop)).toBe(true);
+    expect(desktopEligible(profiles[1], desktop)).toBe(false);
+    expect(desktopActive(profiles[1], desktop)).toBe(false);
   });
 });

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Opensoft Profile Switcher</title>
+  <defs>
+    <linearGradient id="background" x1="64" y1="48" x2="448" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#12314A"/>
+      <stop offset="1" stop-color="#06111D"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="130" y1="128" x2="392" y2="386" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#65E6C4"/>
+      <stop offset="1" stop-color="#4AA8FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <path d="M145 164c0-28 23-51 51-51h120c28 0 51 23 51 51v184c0 28-23 51-51 51H196c-28 0-51-23-51-51V164Z" fill="none" stroke="url(#accent)" stroke-width="30"/>
+  <circle cx="256" cy="208" r="47" fill="url(#accent)"/>
+  <path d="M190 338c8-43 31-66 66-66s58 23 66 66" fill="none" stroke="url(#accent)" stroke-linecap="round" stroke-width="30"/>
+  <path d="m335 116 34 18-34 18" fill="none" stroke="#F8FBFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+  <path d="m177 396-34-18 34-18" fill="none" stroke="#F8FBFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="16"/>
+</svg>

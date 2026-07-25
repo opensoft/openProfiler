@@ -1244,6 +1244,7 @@ fn ensure_safe_active_home(path: &Path) -> Result<()> {
 }
 
 fn atomic_copy(source: &Path, target: &Path, provider: Provider, profile: &str) -> Result<()> {
+    reject_symlink(target)?;
     let mut input = open_file_no_follow(source)?;
     if !input
         .metadata()
@@ -1933,6 +1934,27 @@ mod tests {
         assert!(matches!(
             activate_profile(&config, Provider::Codex, "work"),
             Err(ProfileError::UnsafeActivationPath(_))
+        ));
+        assert_eq!(fs::read_to_string(outside).unwrap(), "preserve-me");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_symlinked_atomic_copy_destination() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source-auth.json");
+        let target = temp.path().join("profile/auth.json");
+        let outside = temp.path().join("outside-auth.json");
+        write_file(&source, "new-secret");
+        write_file(&outside, "preserve-me");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        symlink(&outside, &target).unwrap();
+
+        assert!(matches!(
+            atomic_copy(&source, &target, Provider::Codex, "work"),
+            Err(ProfileError::UnsafeActivationPath(path)) if path == target
         ));
         assert_eq!(fs::read_to_string(outside).unwrap(), "preserve-me");
     }

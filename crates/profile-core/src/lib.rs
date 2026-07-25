@@ -223,7 +223,8 @@ struct ActiveMarker {
     profile: String,
     profile_path: String,
     credential_size: u64,
-    active_modified_unix_nanos: u64,
+    active_modified_unix_secs: u64,
+    active_modified_subsec_nanos: u32,
 }
 
 pub fn discover_profiles(config: &DiscoveryConfig) -> ProfileInventory {
@@ -301,8 +302,8 @@ pub fn activate_profile(
     ensure_safe_active_home(&provider_config.active_home)?;
     let target = provider_config.active_home.join(provider.credential_name());
     reject_symlink(&target)?;
-    atomic_copy(&source, &target)?;
-    let (credential_size, active_modified_unix_nanos) =
+    atomic_copy(&source, &target, provider, &profile.name)?;
+    let (credential_size, active_modified_unix_secs, active_modified_subsec_nanos) =
         credential_stamp(&target).ok_or_else(|| ProfileError::CredentialUnavailable {
             provider,
             profile: profile.name.clone(),
@@ -314,7 +315,8 @@ pub fn activate_profile(
         profile: profile.name.clone(),
         profile_path: profile.profile_path.clone(),
         credential_size,
-        active_modified_unix_nanos,
+        active_modified_unix_secs,
+        active_modified_subsec_nanos,
     };
     let marker_bytes =
         serde_json::to_vec_pretty(&marker).map_err(|source| ProfileError::Write {
@@ -560,9 +562,13 @@ fn marker_matches(
     marker.as_ref().is_some_and(|marker| {
         marker.provider == provider
             && marker.profile_path == profile_path
-            && credential_stamp(active_credential).is_some_and(|(size, modified)| {
-                size == marker.credential_size && modified == marker.active_modified_unix_nanos
-            })
+            && credential_stamp(active_credential).is_some_and(
+                |(size, modified_secs, modified_nanos)| {
+                    size == marker.credential_size
+                        && modified_secs == marker.active_modified_unix_secs
+                        && modified_nanos == marker.active_modified_subsec_nanos
+                },
+            )
     })
 }
 
@@ -629,18 +635,13 @@ fn ensure_regular_nonempty_file(path: &Path) -> Option<()> {
         .map(|_| ())
 }
 
-fn credential_stamp(path: &Path) -> Option<(u64, u64)> {
+fn credential_stamp(path: &Path) -> Option<(u64, u64, u32)> {
     let metadata = fs::symlink_metadata(path).ok()?;
     if !metadata.file_type().is_file() || metadata.len() == 0 {
         return None;
     }
-    let modified = metadata
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    Some((metadata.len(), u64::try_from(modified).ok()?))
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some((metadata.len(), modified.as_secs(), modified.subsec_nanos()))
 }
 
 fn reject_symlink(path: &Path) -> Result<()> {
@@ -678,7 +679,7 @@ fn ensure_safe_active_home(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn atomic_copy(source: &Path, target: &Path) -> Result<()> {
+fn atomic_copy(source: &Path, target: &Path, provider: Provider, profile: &str) -> Result<()> {
     let mut input = File::open(source).map_err(|source_error| ProfileError::Read {
         path: source.to_path_buf(),
         source: source_error,
@@ -689,17 +690,8 @@ fn atomic_copy(source: &Path, target: &Path) -> Result<()> {
         .unwrap_or(false)
     {
         return Err(ProfileError::CredentialUnavailable {
-            provider: if source.file_name().and_then(|value| value.to_str()) == Some("auth.json") {
-                Provider::Codex
-            } else {
-                Provider::Claude
-            },
-            profile: source
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|value| value.to_str())
-                .unwrap_or("profile")
-                .to_string(),
+            provider,
+            profile: profile.to_string(),
         });
     }
 

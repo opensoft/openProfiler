@@ -20,6 +20,6 @@ during discovery. Activation streams the selected credential directly into the
 provider's local active home. Credential contents must never be returned to the
 webview, logged, displayed, transmitted, committed, or exported.
 
-Active credential writes must remain atomic and mode `0600` on Unix. Profile
+Active credential writes must remain atomic and use mode `0600` on Unix. Profile
 roots and activation targets must not cross configured directory boundaries or
 follow attacker-controlled symlinks.

@@ -9,7 +9,8 @@ use thiserror::Error;
 use walkdir::WalkDir;
 
 const MANIFEST_VERSION: u32 = 1;
-const ACTIVE_MARKER: &str = ".profile-switcher-active.json";
+const ACTIVE_MARKER: &str = ".openprofiler-active.json";
+const LEGACY_ACTIVE_MARKER: &str = ".profile-switcher-active.json";
 
 #[derive(Debug, Error)]
 pub enum ProfileError {
@@ -120,7 +121,8 @@ impl DiscoveryConfig {
                 .or_else(|| env::var_os("CHATGPT_PROFILES_HOME"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| Provider::Codex.default_profiles_home(&home)),
-            active_home: env::var_os("PROFILE_SWITCHER_CODEX_ACTIVE_HOME")
+            active_home: env::var_os("OPENPROFILER_CODEX_ACTIVE_HOME")
+                .or_else(|| env::var_os("PROFILE_SWITCHER_CODEX_ACTIVE_HOME"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| Provider::Codex.default_active_home(&home)),
         };
@@ -133,7 +135,8 @@ impl DiscoveryConfig {
             profiles_home: env::var_os("CLAUDE_PROFILES_HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| Provider::Claude.default_profiles_home(&home)),
-            active_home: env::var_os("PROFILE_SWITCHER_CLAUDE_ACTIVE_HOME")
+            active_home: env::var_os("OPENPROFILER_CLAUDE_ACTIVE_HOME")
+                .or_else(|| env::var_os("PROFILE_SWITCHER_CLAUDE_ACTIVE_HOME"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| Provider::Claude.default_active_home(&home)),
         };
@@ -545,12 +548,16 @@ fn read_manifest_profile(path: &Path) -> Result<ManifestProfile> {
 }
 
 fn read_active_marker(config: &ProviderConfig) -> Option<ActiveMarker> {
-    let path = config.active_home.join(ACTIVE_MARKER);
-    let mut file = open_file_no_follow(&path).ok()?;
-    let mut text = String::new();
-    file.read_to_string(&mut text).ok()?;
-    let marker: ActiveMarker = serde_json::from_str(&text).ok()?;
-    (marker.schema_version == 1 && marker.provider == config.provider).then_some(marker)
+    [ACTIVE_MARKER, LEGACY_ACTIVE_MARKER]
+        .into_iter()
+        .find_map(|marker_name| {
+            let path = config.active_home.join(marker_name);
+            let mut file = open_file_no_follow(&path).ok()?;
+            let mut text = String::new();
+            file.read_to_string(&mut text).ok()?;
+            let marker: ActiveMarker = serde_json::from_str(&text).ok()?;
+            (marker.schema_version == 1 && marker.provider == config.provider).then_some(marker)
+        })
 }
 
 fn marker_matches(
@@ -808,7 +815,7 @@ fn temporary_path(target: &Path) -> PathBuf {
         .and_then(|value| value.to_str())
         .unwrap_or("profile");
     target.with_file_name(format!(
-        ".{name}.profile-switcher-{}-{nonce}.tmp",
+        ".{name}.openprofiler-{}-{nonce}.tmp",
         std::process::id()
     ))
 }
@@ -1003,6 +1010,8 @@ mod tests {
             fs::read_to_string(codex.active_home.join("auth.json")).unwrap(),
             "codex-secret"
         );
+        assert!(codex.active_home.join(ACTIVE_MARKER).is_file());
+        assert!(!codex.active_home.join(LEGACY_ACTIVE_MARKER).exists());
 
         let inventory = discover_profiles(&config);
         assert!(inventory.profiles[0].active);
@@ -1010,6 +1019,28 @@ mod tests {
         write_file(&codex.active_home.join("auth.json"), "external-change");
         let inventory = discover_profiles(&config);
         assert!(!inventory.profiles[0].active);
+    }
+
+    #[test]
+    fn recognizes_legacy_active_marker() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        write_file(
+            &codex.profiles_home.join("profiles/work/auth.json"),
+            "codex-secret",
+        );
+
+        activate_profile(&config, Provider::Codex, "work").unwrap();
+        fs::rename(
+            codex.active_home.join(ACTIVE_MARKER),
+            codex.active_home.join(LEGACY_ACTIVE_MARKER),
+        )
+        .unwrap();
+
+        let inventory = discover_profiles(&config);
+        assert_eq!(inventory.profiles.len(), 1);
+        assert!(inventory.profiles[0].active);
     }
 
     #[test]
@@ -1098,11 +1129,7 @@ mod tests {
             &outside,
             r#"{"schemaVersion":1,"provider":"codex","profile":"work","profilePath":"work","credentialSize":12,"activeModifiedUnixSecs":0,"activeModifiedSubsecNanos":0}"#,
         );
-        symlink(
-            &outside,
-            codex.active_home.join(".profile-switcher-active.json"),
-        )
-        .unwrap();
+        symlink(&outside, codex.active_home.join(ACTIVE_MARKER)).unwrap();
 
         let inventory = discover_profiles(&config);
         assert_eq!(inventory.profiles.len(), 1);

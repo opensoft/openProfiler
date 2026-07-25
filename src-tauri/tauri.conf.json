@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Profile Switcher",
+  "productName": "openProfiler",
   "version": "0.1.0",
-  "identifier": "com.opensoft.profile-switcher",
+  "identifier": "com.opensoft.openprofiler",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -16,7 +16,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Profile Switcher",
+        "title": "openProfiler",
         "width": 1180,
         "height": 760,
         "minWidth": 760,
@@ -31,8 +31,8 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "Switch between local Codex and Claude profiles",
-    "longDescription": "A local-first desktop manager for user-owned Codex and Claude profiles created by workBenches.",
+    "shortDescription": "A full LLM profile manager",
+    "longDescription": "openProfiler discovers and activates user-owned LLM profiles, including Codex and Claude profiles created by workBenches.",
     "copyright": "Copyright 2026 Opensoft Inc.",
     "license": "Apache-2.0",
     "icon": [

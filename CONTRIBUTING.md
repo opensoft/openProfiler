@@ -10,8 +10,8 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm build
 cargo fmt --all --check
-cargo test -p opensoft-profile-core
-cargo clippy -p opensoft-profile-core --all-targets -- -D warnings
+cargo test -p opensoft-open-profiler-core
+cargo clippy -p opensoft-open-profiler-core --all-targets -- -D warnings
 ```
 
 Do not add copied source, visual assets, text, or branding from projects that

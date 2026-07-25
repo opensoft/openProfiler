@@ -36,8 +36,8 @@ jobs:
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
-      - run: cargo test -p opensoft-profile-core
-      - run: cargo clippy -p opensoft-profile-core --all-targets -- -D warnings
+      - run: cargo test -p opensoft-open-profiler-core
+      - run: cargo clippy -p opensoft-open-profiler-core --all-targets -- -D warnings
 
   windows:
     name: Windows core and shell
@@ -48,9 +48,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p opensoft-profile-core
-      - run: cargo clippy -p opensoft-profile-core --all-targets -- -D warnings
-      - run: cargo check -p opensoft-profile-switcher
+      - run: cargo test -p opensoft-open-profiler-core
+      - run: cargo clippy -p opensoft-open-profiler-core --all-targets -- -D warnings
+      - run: cargo check -p opensoft-open-profiler
 
   tauri-check:
     name: Tauri shell
@@ -67,4 +67,4 @@ jobs:
             patchelf
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p opensoft-profile-switcher
+      - run: cargo check -p opensoft-open-profiler

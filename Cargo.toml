@@ -1,11 +1,11 @@
 [workspace]
-members = ["crates/profile-core", "src-tauri"]
+members = ["crates/open-profiler-core", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/opensoft/profile-switcher"
+repository = "https://github.com/opensoft/openProfiler"
 rust-version = "1.88"
 
 [workspace.dependencies]

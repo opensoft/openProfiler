@@ -1,39 +1,45 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { devFixtureInventory } from "./dev-fixture";
 import {
-  ALL_FAMILIES,
+  ALL_PROVIDERS,
   credentialLabel,
   filterProfiles,
-  profileFamilies,
+  providerLabel,
 } from "./profile-utils";
-import type { CodexAction, CodexProfile, ProfileInventory } from "./types";
-
-const actions: Array<{ action: CodexAction; label: string }> = [
-  { action: "launch", label: "Launch" },
-  { action: "status", label: "Status" },
-  { action: "login", label: "Login" },
-  { action: "logout", label: "Logout" },
-];
+import type {
+  ActivationResult,
+  Profile,
+  ProfileInventory,
+  Provider,
+} from "./types";
 
 function ProfileCard({
+  activating,
+  onActivate,
   profile,
-  onCommand,
 }: {
-  profile: CodexProfile;
-  onCommand: (profile: CodexProfile, action: CodexAction) => Promise<void>;
+  activating: string;
+  onActivate: (profile: Profile) => Promise<void>;
+  profile: Profile;
 }) {
-  const credentialClass = profile.credentialPresent
-    ? "status-chip status-chip--ready"
-    : profile.configured
-      ? "status-chip status-chip--warning"
-      : "status-chip";
+  const key = `${profile.provider}:${profile.profilePath}`;
+  const credentialClass = profile.active
+    ? "status-chip status-chip--active"
+    : profile.credentialPresent
+      ? "status-chip status-chip--ready"
+      : profile.configured
+        ? "status-chip status-chip--warning"
+        : "status-chip";
 
   return (
-    <article className="profile-card">
+    <article className={`profile-card profile-card--${profile.provider}`}>
       <div className="profile-card__topline">
         <div>
-          <p className="eyebrow">{profile.family}</p>
+          <p className="eyebrow">
+            {providerLabel(profile.provider)} · {profile.family}
+          </p>
           <h2>{profile.name}</h2>
         </div>
         <span className={credentialClass}>{credentialLabel(profile)}</span>
@@ -41,8 +47,8 @@ function ProfileCard({
 
       <dl className="profile-details">
         <div>
-          <dt>Expected identity</dt>
-          <dd>{profile.email}</dd>
+          <dt>Identity</dt>
+          <dd>{profile.email || "Not declared"}</dd>
         </div>
         <div>
           <dt>Profile path</dt>
@@ -58,22 +64,26 @@ function ProfileCard({
 
       <div className="profile-card__footer">
         <span className="source-label">
-          {profile.source === "manifest" ? "Manifest" : "Local metadata"}
+          {profile.source === "manifest"
+            ? "Manifest"
+            : profile.source === "profile-metadata"
+              ? "Local metadata"
+              : "Profile directory"}
         </span>
-        <div className="actions" aria-label={`Commands for ${profile.name}`}>
-          {actions.map(({ action, label }) => (
-            <button
-              className={
-                action === "launch" ? "button button--primary" : "button"
-              }
-              key={action}
-              onClick={() => void onCommand(profile, action)}
-              type="button"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <button
+          className="button button--primary"
+          disabled={
+            profile.active || !profile.credentialPresent || Boolean(activating)
+          }
+          onClick={() => void onActivate(profile)}
+          type="button"
+        >
+          {profile.active
+            ? "Active"
+            : activating === key
+              ? "Activating…"
+              : "Activate"}
+        </button>
       </div>
     </article>
   );
@@ -81,21 +91,27 @@ function ProfileCard({
 
 export default function App() {
   const [inventory, setInventory] = useState<ProfileInventory | null>(null);
-  const [family, setFamily] = useState(ALL_FAMILIES);
+  const [provider, setProvider] = useState<Provider | typeof ALL_PROVIDERS>(
+    ALL_PROVIDERS,
+  );
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState("");
-  const [commandPreview, setCommandPreview] = useState("");
+  const [toast, setToast] = useState("");
+  const [activating, setActivating] = useState("");
 
   const loadProfiles = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const nextInventory = await invoke<ProfileInventory>(
-        "list_codex_profiles",
-      );
-      setInventory(nextInventory);
+      if (
+        import.meta.env.DEV &&
+        new URLSearchParams(window.location.search).has("fixture")
+      ) {
+        setInventory(devFixtureInventory);
+        return;
+      }
+      setInventory(await invoke<ProfileInventory>("list_profiles"));
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -108,44 +124,44 @@ export default function App() {
   }, [loadProfiles]);
 
   const showToast = useCallback((message: string) => {
-    setCopied(message);
-    window.setTimeout(() => setCopied(""), 2600);
+    setToast(message);
+    window.setTimeout(() => setToast(""), 3600);
   }, []);
 
-  const families = useMemo(
-    () => profileFamilies(inventory?.profiles ?? []),
-    [inventory],
-  );
   const visibleProfiles = useMemo(
-    () => filterProfiles(inventory?.profiles ?? [], family, query),
-    [family, inventory, query],
+    () => filterProfiles(inventory?.profiles ?? [], provider, query),
+    [inventory, provider, query],
   );
 
-  const copyCommand = useCallback(
-    async (profile: CodexProfile, action: CodexAction) => {
+  const activate = useCallback(
+    async (profile: Profile) => {
+      const key = `${profile.provider}:${profile.profilePath}`;
+      setActivating(key);
       setError("");
       try {
-        const command = await invoke<string>("build_codex_command", {
-          profile: profile.name,
-          action,
+        const result = await invoke<ActivationResult>("activate_profile", {
+          provider: profile.provider,
+          profilePath: profile.profilePath,
         });
-        setCommandPreview(command);
-        try {
-          await navigator.clipboard.writeText(command);
-          showToast(`${command} copied`);
-        } catch {
-          showToast("Command ready to copy");
-        }
+        await loadProfiles();
+        showToast(
+          `${providerLabel(result.provider)} profile ${result.profile} is active. Restart the provider app if it was already open.`,
+        );
       } catch (reason) {
         setError(String(reason));
+      } finally {
+        setActivating("");
       }
     },
-    [showToast],
+    [loadProfiles, showToast],
   );
 
   const readyCount =
     inventory?.profiles.filter((profile) => profile.credentialPresent).length ??
     0;
+  const activeCount =
+    inventory?.profiles.filter((profile) => profile.active).length ?? 0;
+  const issues = inventory?.stores.flatMap((store) => store.issues) ?? [];
 
   return (
     <main className="app-shell">
@@ -154,16 +170,16 @@ export default function App() {
           <span />
         </div>
         <div className="hero__copy">
-          <p className="eyebrow">Opensoft · workBenches</p>
+          <p className="eyebrow">Local profiles · Codex + Claude</p>
           <h1>Profile Switcher</h1>
           <p>
-            Choose the right Codex identity without moving or exposing
-            credentials.
+            Discover workBenches profiles and choose the local identity each
+            provider uses next.
           </p>
         </div>
         <div className="privacy-badge">
           <span className="privacy-badge__dot" />
-          Local metadata only
+          Local-only activation
         </div>
       </header>
 
@@ -177,8 +193,8 @@ export default function App() {
           <span>Ready</span>
         </div>
         <div>
-          <strong>{families.length}</strong>
-          <span>Families</span>
+          <strong>{activeCount}</strong>
+          <span>Active</span>
         </div>
         <button
           className="refresh-button"
@@ -186,7 +202,7 @@ export default function App() {
           type="button"
         >
           <span aria-hidden="true">↻</span>
-          Refresh inventory
+          Scan profile stores
         </button>
       </section>
 
@@ -196,23 +212,31 @@ export default function App() {
           <span aria-hidden="true">⌕</span>
           <input
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search name, identity, family, or alias"
+            placeholder="Search provider, name, identity, family, or path"
             type="search"
             value={query}
           />
         </label>
-        <div className="family-tabs" role="group" aria-label="Profile family">
-          {[ALL_FAMILIES, ...families].map((item) => (
+        <div className="family-tabs" role="group" aria-label="Provider">
+          {[
+            { value: ALL_PROVIDERS, label: "All" },
+            { value: "codex", label: "Codex" },
+            { value: "claude", label: "Claude" },
+          ].map((item) => (
             <button
-              aria-pressed={family === item}
+              aria-pressed={provider === item.value}
               className={
-                family === item ? "family-tab family-tab--active" : "family-tab"
+                provider === item.value
+                  ? "family-tab family-tab--active"
+                  : "family-tab"
               }
-              key={item}
-              onClick={() => setFamily(item)}
+              key={item.value}
+              onClick={() =>
+                setProvider(item.value as Provider | typeof ALL_PROVIDERS)
+              }
               type="button"
             >
-              {item === ALL_FAMILIES ? "All profiles" : item}
+              {item.label}
             </button>
           ))}
         </div>
@@ -220,54 +244,38 @@ export default function App() {
 
       {error ? (
         <aside className="message message--error" role="alert">
-          <strong>Profile inventory unavailable</strong>
+          <strong>Profile operation failed</strong>
           <span>{error}</span>
         </aside>
       ) : null}
 
-      {copied ? (
-        <div className="toast" role="status">
-          {copied}
-        </div>
+      {issues.length ? (
+        <aside className="message message--warning" role="status">
+          <strong>Some profile metadata could not be loaded</strong>
+          {issues.slice(0, 4).map((issue) => (
+            <span key={issue}>{issue}</span>
+          ))}
+        </aside>
       ) : null}
 
-      {commandPreview ? (
-        <section
-          className="command-preview"
-          aria-label="Generated Codex command"
-        >
-          <div>
-            <span>Generated command</span>
-            <code>{commandPreview}</code>
-          </div>
-          <button
-            className="button"
-            onClick={() => {
-              void navigator.clipboard
-                .writeText(commandPreview)
-                .then(() => showToast(`${commandPreview} copied`))
-                .catch(() =>
-                  showToast("Select the command and copy it manually"),
-                );
-            }}
-            type="button"
-          >
-            Copy
-          </button>
-        </section>
+      {toast ? (
+        <div className="toast" role="status">
+          {toast}
+        </div>
       ) : null}
 
       {loading ? (
         <section className="loading-state" aria-live="polite">
           <span className="spinner" />
-          Reading profile metadata…
+          Scanning Codex and Claude profile stores…
         </section>
       ) : visibleProfiles.length ? (
-        <section className="profile-grid" aria-label="Codex profiles">
+        <section className="profile-grid" aria-label="Local profiles">
           {visibleProfiles.map((profile) => (
             <ProfileCard
-              key={profile.name}
-              onCommand={copyCommand}
+              activating={activating}
+              key={`${profile.provider}:${profile.profilePath}`}
+              onActivate={activate}
               profile={profile}
             />
           ))}
@@ -277,23 +285,25 @@ export default function App() {
           <div className="empty-state__icon" aria-hidden="true">
             &gt;_
           </div>
-          <h2>No matching Codex profiles</h2>
+          <h2>No matching local profiles</h2>
           <p>
-            Run <code>setup-codex-profiles.sh</code> or adjust the manifest and
-            profile home environment variables.
+            Set up Codex or Claude profiles with workBenches, then scan again.
+            The switcher also recognizes credential-bearing profile directories
+            when no manifest is available.
           </p>
         </section>
       )}
 
       <footer className="inventory-footer">
-        <div>
-          <span>Manifest</span>
-          <code>{inventory?.manifestPath ?? "Waiting for inventory…"}</code>
-        </div>
-        <div>
-          <span>Profile home</span>
-          <code>{inventory?.profilesHome ?? "Waiting for inventory…"}</code>
-        </div>
+        {(inventory?.stores ?? []).map((store) => (
+          <div key={store.provider}>
+            <span>{providerLabel(store.provider)} profile store</span>
+            <code title={store.profilesHome}>{store.profilesHome}</code>
+            <small title={store.activeHome}>
+              Active home: {store.activeHome}
+            </small>
+          </div>
+        ))}
       </footer>
     </main>
   );

@@ -1,22 +1,16 @@
-import type { CodexProfile } from "./types";
+import type { Profile, Provider } from "./types";
 
-export const ALL_FAMILIES = "__all__";
-
-export function profileFamilies(profiles: CodexProfile[]): string[] {
-  return [...new Set(profiles.map((profile) => profile.family))].sort((a, b) =>
-    a.localeCompare(b),
-  );
-}
+export const ALL_PROVIDERS = "__all__";
 
 export function filterProfiles(
-  profiles: CodexProfile[],
-  family: string,
+  profiles: Profile[],
+  provider: Provider | typeof ALL_PROVIDERS,
   query: string,
-): CodexProfile[] {
+): Profile[] {
   const normalizedQuery = query.trim().toLowerCase();
 
   return profiles.filter((profile) => {
-    if (family !== ALL_FAMILIES && profile.family !== family) {
+    if (provider !== ALL_PROVIDERS && profile.provider !== provider) {
       return false;
     }
 
@@ -25,6 +19,7 @@ export function filterProfiles(
     }
 
     return [
+      profile.provider,
       profile.name,
       profile.email,
       profile.family,
@@ -34,10 +29,16 @@ export function filterProfiles(
   });
 }
 
-export function credentialLabel(profile: CodexProfile): string {
+export function credentialLabel(profile: Profile): string {
+  if (profile.active) {
+    return "Active";
+  }
   if (!profile.configured) {
     return "Not materialized";
   }
+  return profile.credentialPresent ? "Ready" : "Login required";
+}
 
-  return profile.credentialPresent ? "Credential present" : "Login required";
+export function providerLabel(provider: Provider): string {
+  return provider === "codex" ? "Codex" : "Claude";
 }

@@ -39,6 +39,19 @@ jobs:
       - run: cargo test -p opensoft-profile-core
       - run: cargo clippy -p opensoft-profile-core --all-targets -- -D warnings
 
+  windows:
+    name: Windows core and shell
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p opensoft-profile-core
+      - run: cargo clippy -p opensoft-profile-core --all-targets -- -D warnings
+      - run: cargo check -p opensoft-profile-switcher
+
   tauri-check:
     name: Tauri shell
     runs-on: ubuntu-24.04

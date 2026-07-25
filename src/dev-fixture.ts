@@ -1,0 +1,61 @@
+import type { ProfileInventory } from "./types";
+
+export const devFixtureInventory: ProfileInventory = {
+  profiles: [
+    {
+      provider: "codex",
+      name: "company-codex",
+      email: "developer@company.example",
+      family: "company",
+      aliases: ["work"],
+      profilePath: "company/company-codex",
+      status: "active",
+      configured: true,
+      credentialPresent: true,
+      active: true,
+      source: "manifest",
+    },
+    {
+      provider: "claude",
+      name: "company-claude",
+      email: "developer@company.example",
+      family: "company",
+      aliases: ["office"],
+      profilePath: "company/company-claude",
+      status: "active",
+      configured: true,
+      credentialPresent: true,
+      active: false,
+      source: "profile-metadata",
+    },
+    {
+      provider: "codex",
+      name: "personal",
+      email: "",
+      family: "personal",
+      aliases: [],
+      profilePath: "personal",
+      status: "active",
+      configured: true,
+      credentialPresent: false,
+      active: false,
+      source: "profile-directory",
+    },
+  ],
+  stores: [
+    {
+      provider: "codex",
+      manifestPath: "/home/user/.config/workbenches/openai-profiles.json",
+      profilesHome: "/home/user/.chatgpt-profiles",
+      activeHome: "/home/user/.codex",
+      issues: [],
+    },
+    {
+      provider: "claude",
+      manifestPath: "/home/user/.config/workbenches/claude-profiles.json",
+      profilesHome: "/home/user/.claude-profiles",
+      activeHome: "/home/user/.claude",
+      issues: [],
+    },
+  ],
+};

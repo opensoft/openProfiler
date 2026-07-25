@@ -76,12 +76,12 @@ function DesktopProfileAction({
   desktopActivating,
   onActivateDesktop,
   profile,
-}: {
+}: Readonly<{
   desktop: DesktopAppStatus | null;
   desktopActivating: string;
   onActivateDesktop: (profile: Profile) => Promise<void>;
   profile: Profile;
-}) {
+}>) {
   if (profile.provider !== "codex" || !desktop?.platformSupported) {
     return null;
   }
@@ -118,14 +118,14 @@ function ProfileCard({
   onActivate,
   onActivateDesktop,
   profile,
-}: {
+}: Readonly<{
   activating: string;
   desktop: DesktopAppStatus | null;
   desktopActivating: string;
   onActivate: (profile: Profile) => Promise<void>;
   onActivateDesktop: (profile: Profile) => Promise<void>;
   profile: Profile;
-}) {
+}>) {
   const key = `${profile.provider}:${profile.profilePath}`;
   const cliActivating = activating === key;
 
@@ -193,12 +193,12 @@ function DesktopStatusPanel({
   desktopActivating,
   onConfirm,
   onRollback,
-}: {
+}: Readonly<{
   desktop: DesktopAppStatus | null;
   desktopActivating: string;
   onConfirm: () => Promise<void>;
   onRollback: () => Promise<void>;
-}) {
+}>) {
   if (!desktop?.platformSupported) {
     return null;
   }
@@ -257,7 +257,7 @@ function ProfileResults({
   onActivate,
   onActivateDesktop,
   profiles,
-}: {
+}: Readonly<{
   activating: string;
   desktop: DesktopAppStatus | null;
   desktopActivating: string;
@@ -265,7 +265,7 @@ function ProfileResults({
   onActivate: (profile: Profile) => Promise<void>;
   onActivateDesktop: (profile: Profile) => Promise<void>;
   profiles: Profile[];
-}) {
+}>) {
   if (loading) {
     return (
       <section className="loading-state" aria-live="polite">

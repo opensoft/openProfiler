@@ -1,0 +1,18 @@
+[package]
+name = "opensoft-profile-core"
+version = "0.1.0"
+description = "Secure workBenches Codex profile discovery"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dirs = "6"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"

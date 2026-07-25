@@ -39,6 +39,13 @@ export function credentialLabel(profile: Profile): string {
   return profile.credentialPresent ? "Ready" : "Login required";
 }
 
+export function activationPayload(profile: Profile) {
+  return {
+    provider: profile.provider,
+    profilePath: profile.profilePath,
+  };
+}
+
 export function providerLabel(provider: Provider): string {
   return provider === "codex" ? "Codex" : "Claude";
 }

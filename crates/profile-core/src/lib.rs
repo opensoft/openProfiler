@@ -190,7 +190,6 @@ pub enum ProfileSource {
 pub struct ActivationResult {
     pub provider: Provider,
     pub profile: String,
-    pub active_credential_path: PathBuf,
     pub restart_required: bool,
 }
 
@@ -331,7 +330,6 @@ pub fn activate_profile(
     Ok(ActivationResult {
         provider,
         profile: profile.name.clone(),
-        active_credential_path: target,
         restart_required: true,
     })
 }
@@ -548,7 +546,9 @@ fn read_manifest_profile(path: &Path) -> Result<ManifestProfile> {
 
 fn read_active_marker(config: &ProviderConfig) -> Option<ActiveMarker> {
     let path = config.active_home.join(ACTIVE_MARKER);
-    let text = fs::read_to_string(path).ok()?;
+    let mut file = open_file_no_follow(&path).ok()?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
     let marker: ActiveMarker = serde_json::from_str(&text).ok()?;
     (marker.schema_version == 1 && marker.provider == config.provider).then_some(marker)
 }
@@ -680,7 +680,7 @@ fn ensure_safe_active_home(path: &Path) -> Result<()> {
 }
 
 fn atomic_copy(source: &Path, target: &Path, provider: Provider, profile: &str) -> Result<()> {
-    let mut input = open_credential_source(source)?;
+    let mut input = open_file_no_follow(source)?;
     if !input
         .metadata()
         .map(|metadata| metadata.is_file() && metadata.len() > 0)
@@ -709,7 +709,7 @@ fn atomic_copy(source: &Path, target: &Path, provider: Provider, profile: &str) 
     })
 }
 
-fn open_credential_source(path: &Path) -> Result<File> {
+fn open_file_no_follow(path: &Path) -> Result<File> {
     reject_symlink(path)?;
     let mut options = OpenOptions::new();
     options.read(true);
@@ -1074,9 +1074,39 @@ mod tests {
 
         assert!(discover_profiles(&config).profiles.is_empty());
         assert!(matches!(
-            open_credential_source(&source),
+            open_file_no_follow(&source),
             Err(ProfileError::UnsafeActivationPath(_))
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignores_symlinked_active_marker() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        write_file(
+            &codex.profiles_home.join("profiles/work/auth.json"),
+            "codex-secret",
+        );
+        write_file(&codex.active_home.join("auth.json"), "codex-secret");
+
+        let outside = temp.path().join("outside-marker");
+        write_file(
+            &outside,
+            r#"{"schemaVersion":1,"provider":"codex","profile":"work","profilePath":"work","credentialSize":12,"activeModifiedUnixSecs":0,"activeModifiedSubsecNanos":0}"#,
+        );
+        symlink(
+            &outside,
+            codex.active_home.join(".profile-switcher-active.json"),
+        )
+        .unwrap();
+
+        let inventory = discover_profiles(&config);
+        assert_eq!(inventory.profiles.len(), 1);
+        assert!(!inventory.profiles[0].active);
     }
 
     #[test]

@@ -30,6 +30,5 @@ export interface ProfileInventory {
 export interface ActivationResult {
   provider: Provider;
   profile: string;
-  activeCredentialPath: string;
   restartRequired: boolean;
 }

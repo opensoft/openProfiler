@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activationPayload,
   ALL_PROVIDERS,
   credentialLabel,
   filterProfiles,
@@ -66,5 +67,12 @@ describe("profile utilities", () => {
   it("formats provider labels", () => {
     expect(providerLabel("codex")).toBe("Codex");
     expect(providerLabel("claude")).toBe("Claude");
+  });
+
+  it("uses Tauri's camel-case command argument names", () => {
+    expect(activationPayload(profiles[0])).toEqual({
+      provider: "codex",
+      profilePath: "company/work",
+    });
   });
 });

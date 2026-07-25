@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { devFixtureInventory } from "./dev-fixture";
 import {
+  activationPayload,
   ALL_PROVIDERS,
   credentialLabel,
   filterProfiles,
@@ -139,10 +140,10 @@ export default function App() {
       setActivating(key);
       setError("");
       try {
-        const result = await invoke<ActivationResult>("activate_profile", {
-          provider: profile.provider,
-          profilePath: profile.profilePath,
-        });
+        const result = await invoke<ActivationResult>(
+          "activate_profile",
+          activationPayload(profile),
+        );
         await loadProfiles();
         showToast(
           `${providerLabel(result.provider)} profile ${result.profile} is active. Restart the provider app if it was already open.`,

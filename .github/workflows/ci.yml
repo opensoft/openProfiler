@@ -50,6 +50,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p opensoft-open-profiler-core
       - run: cargo clippy -p opensoft-open-profiler-core --all-targets -- -D warnings
+      - run: cargo test -p opensoft-open-profiler
       - run: cargo check -p opensoft-open-profiler
 
   tauri-check:

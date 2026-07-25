@@ -20,13 +20,47 @@ standard user home.
   readiness.
 - Activate Codex by atomically replacing `~/.codex/auth.json`.
 - Activate Claude by atomically replacing `~/.claude/.credentials.json`.
+- On Windows, switch a reusable file-based ChatGPT login in the combined GPT
+  desktop app after closing it, then relaunch it with rollback available.
 - Record only non-secret active-profile metadata in
   `.openprofiler-active.json`.
 
 Existing Codex or Claude processes may cache their login. Close and reopen the
-provider app after activation. This project switches local Codex and Claude Code
-credentials; it does not switch browser sessions or unrelated ChatGPT/Claude
-consumer-app session stores.
+provider app after CLI activation. openProfiler can manage the combined Windows
+GPT/Codex desktop app's supported file credential, but it does not switch
+browser sessions or Claude consumer-app session stores.
+
+## Windows GPT app
+
+Run the native Windows build of openProfiler to enable **Use in GPT app**.
+When the combined ChatGPT/Codex desktop app uses a complete file-based ChatGPT
+credential at `%USERPROFILE%\.codex\auth.json`, openProfiler:
+
+1. asks every packaged ChatGPT/Codex window to close and waits for its processes
+   to stop;
+2. saves the desktop app's latest refreshed credential back into every matching
+   local profile;
+3. creates a restricted rollback copy;
+4. atomically installs the selected profile while preserving the destination
+   Windows ACL;
+5. verifies the selected non-secret account identity and relaunches the app.
+
+After checking the account and workspace in the GPT app profile menu, select
+**Keep this login** to remove the rollback copy or **Undo switch** to restore the
+previous login.
+
+Only complete reusable ChatGPT OAuth bundles are eligible. An access token by
+itself, an API-key profile, and a partial credential are rejected. If
+`cli_auth_credentials_store = "keyring"` is configured, or file-based storage
+cannot be established, openProfiler refuses token injection and leaves the
+supported logout/sign-in flow in control. See the official
+[Codex authentication guide](https://learn.chatgpt.com/docs/auth) for the
+supported credential-store modes.
+
+On Windows, when `%USERPROFILE%\.chatgpt-profiles` is absent and exactly one WSL
+profile store exists, openProfiler discovers it through `\\wsl.localhost`.
+Set the profile-store environment variables below when more than one WSL store
+exists.
 
 ## Discovery
 
@@ -46,6 +80,13 @@ Environment overrides:
 | Profile store | `CODEX_PROFILES_HOME` or `CHATGPT_PROFILES_HOME`         | `CLAUDE_PROFILES_HOME`            |
 | Active home   | `OPENPROFILER_CODEX_ACTIVE_HOME`                         | `OPENPROFILER_CLAUDE_ACTIVE_HOME` |
 
+Windows desktop overrides:
+
+| Purpose             | Variable                            |
+| ------------------- | ----------------------------------- |
+| Desktop Codex home  | `OPENPROFILER_CODEX_DESKTOP_HOME`   |
+| Packaged GPT app ID | `OPENPROFILER_CODEX_DESKTOP_APP_ID` |
+
 Manifest metadata takes precedence, followed by `.profile.json`, then a
 credential-bearing profile directory. A malformed provider manifest is reported
 without hiding valid profiles from the other provider.
@@ -62,10 +103,12 @@ but all new activations write `.openprofiler-active.json`.
   sent over the network.
 - Activation copies the selected credential through a mode-`0600` temporary file
   and atomically replaces the provider's active credential.
+- Windows desktop replacement preserves the destination ACL and retains one
+  restricted rollback copy until the user keeps or undoes the switch.
 - Profile paths must stay beneath their configured profile root.
 - Symlinked active homes and credential targets are rejected.
-- The Tauri webview receives only two purpose-built commands: list profiles and
-  activate a selected discovered profile.
+- The Tauri webview receives only purpose-built inventory, activation, desktop
+  status, confirmation, and rollback commands.
 - There is no generic shell, filesystem, network, dialog, or updater permission.
 
 Treat all provider credential files as passwords. Never commit, paste, export,

@@ -1,4 +1,4 @@
-import type { Profile, Provider } from "./types";
+import type { DesktopAppStatus, Profile, Provider } from "./types";
 
 export const ALL_PROVIDERS = "__all__";
 
@@ -44,6 +44,32 @@ export function activationPayload(profile: Profile) {
     provider: profile.provider,
     profilePath: profile.profilePath,
   };
+}
+
+export function desktopActivationPayload(profile: Profile) {
+  return {
+    profilePath: profile.profilePath,
+  };
+}
+
+export function desktopEligible(
+  profile: Profile,
+  desktop: DesktopAppStatus | null,
+): boolean {
+  return Boolean(
+    profile.provider === "codex" &&
+    desktop?.eligibleProfilePaths.includes(profile.profilePath),
+  );
+}
+
+export function desktopActive(
+  profile: Profile,
+  desktop: DesktopAppStatus | null,
+): boolean {
+  return Boolean(
+    profile.provider === "codex" &&
+    desktop?.activeProfilePaths.includes(profile.profilePath),
+  );
 }
 
 export function providerLabel(provider: Provider): string {

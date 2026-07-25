@@ -32,3 +32,22 @@ export interface ActivationResult {
   profile: string;
   restartRequired: boolean;
 }
+
+export interface DesktopAppStatus {
+  platformSupported: boolean;
+  installed: boolean;
+  running: boolean;
+  fileActivationSupported: boolean;
+  credentialStore: string;
+  eligibleProfilePaths: string[];
+  activeProfilePaths: string[];
+  rollbackAvailable: boolean;
+  message: string;
+}
+
+export interface DesktopActivationOutcome {
+  profile: string;
+  outgoingProfilesUpdated: number;
+  rollbackAvailable: boolean;
+  relaunched: boolean;
+}

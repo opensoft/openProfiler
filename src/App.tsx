@@ -1,16 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { devFixtureInventory } from "./dev-fixture";
+import { devFixtureDesktopStatus, devFixtureInventory } from "./dev-fixture";
 import {
   activationPayload,
   ALL_PROVIDERS,
   credentialLabel,
+  desktopActivationPayload,
+  desktopActive,
+  desktopEligible,
   filterProfiles,
   providerLabel,
 } from "./profile-utils";
 import type {
   ActivationResult,
+  DesktopActivationOutcome,
+  DesktopAppStatus,
   Profile,
   ProfileInventory,
   Provider,
@@ -18,14 +23,22 @@ import type {
 
 function ProfileCard({
   activating,
+  desktop,
+  desktopActivating,
   onActivate,
+  onActivateDesktop,
   profile,
 }: {
   activating: string;
+  desktop: DesktopAppStatus | null;
+  desktopActivating: string;
   onActivate: (profile: Profile) => Promise<void>;
+  onActivateDesktop: (profile: Profile) => Promise<void>;
   profile: Profile;
 }) {
   const key = `${profile.provider}:${profile.profilePath}`;
+  const eligibleForDesktop = desktopEligible(profile, desktop);
+  const activeInDesktop = desktopActive(profile, desktop);
   const credentialClass = profile.active
     ? "status-chip status-chip--active"
     : profile.credentialPresent
@@ -71,20 +84,49 @@ function ProfileCard({
               ? "Local metadata"
               : "Profile directory"}
         </span>
-        <button
-          className="button button--primary"
-          disabled={
-            profile.active || !profile.credentialPresent || Boolean(activating)
-          }
-          onClick={() => void onActivate(profile)}
-          type="button"
-        >
-          {profile.active
-            ? "Active"
-            : activating === key
-              ? "Activating…"
-              : "Activate"}
-        </button>
+        <div className="actions">
+          {profile.provider === "codex" && desktop?.platformSupported ? (
+            <button
+              className="button button--desktop"
+              disabled={
+                activeInDesktop ||
+                !desktop.installed ||
+                !desktop.fileActivationSupported ||
+                !eligibleForDesktop ||
+                desktop.rollbackAvailable ||
+                Boolean(desktopActivating)
+              }
+              onClick={() => void onActivateDesktop(profile)}
+              title={desktop.message}
+              type="button"
+            >
+              {activeInDesktop
+                ? "GPT app active"
+                : desktopActivating === key
+                  ? "Switching GPT app…"
+                  : eligibleForDesktop
+                    ? "Use in GPT app"
+                    : "GPT login required"}
+            </button>
+          ) : null}
+          <button
+            className="button button--primary"
+            disabled={
+              profile.active ||
+              !profile.credentialPresent ||
+              Boolean(activating) ||
+              Boolean(desktopActivating)
+            }
+            onClick={() => void onActivate(profile)}
+            type="button"
+          >
+            {profile.active
+              ? "CLI active"
+              : activating === key
+                ? "Activating…"
+                : "Use in CLI"}
+          </button>
+        </div>
       </div>
     </article>
   );
@@ -92,6 +134,7 @@ function ProfileCard({
 
 export default function App() {
   const [inventory, setInventory] = useState<ProfileInventory | null>(null);
+  const [desktop, setDesktop] = useState<DesktopAppStatus | null>(null);
   const [provider, setProvider] = useState<Provider | typeof ALL_PROVIDERS>(
     ALL_PROVIDERS,
   );
@@ -100,6 +143,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState("");
   const [activating, setActivating] = useState("");
+  const [desktopActivating, setDesktopActivating] = useState("");
 
   const loadProfiles = useCallback(async () => {
     setLoading(true);
@@ -109,10 +153,17 @@ export default function App() {
         import.meta.env.DEV &&
         new URLSearchParams(window.location.search).has("fixture")
       ) {
+        const fixture =
+          new URLSearchParams(window.location.search).get("fixture") ?? "";
         setInventory(devFixtureInventory);
+        setDesktop({
+          ...devFixtureDesktopStatus,
+          rollbackAvailable: fixture === "rollback",
+        });
         return;
       }
       setInventory(await invoke<ProfileInventory>("list_profiles"));
+      setDesktop(await invoke<DesktopAppStatus>("desktop_app_status"));
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -156,6 +207,63 @@ export default function App() {
     },
     [loadProfiles, showToast],
   );
+
+  const activateDesktop = useCallback(
+    async (profile: Profile) => {
+      const key = `${profile.provider}:${profile.profilePath}`;
+      setDesktopActivating(key);
+      setError("");
+      try {
+        const result = await invoke<DesktopActivationOutcome>(
+          "activate_codex_desktop_profile",
+          desktopActivationPayload(profile),
+        );
+        await loadProfiles();
+        showToast(
+          `${result.profile} is active in the GPT app. Confirm the account in its profile menu, then keep this login or undo it here.`,
+        );
+      } catch (reason) {
+        const message = String(reason);
+        await loadProfiles();
+        setError(message);
+      } finally {
+        setDesktopActivating("");
+      }
+    },
+    [loadProfiles, showToast],
+  );
+
+  const confirmDesktop = useCallback(async () => {
+    setDesktopActivating("__confirm__");
+    setError("");
+    try {
+      await invoke("confirm_codex_desktop_profile");
+      await loadProfiles();
+      showToast(
+        "The GPT app login was kept and its rollback copy was removed.",
+      );
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setDesktopActivating("");
+    }
+  }, [loadProfiles, showToast]);
+
+  const rollbackDesktop = useCallback(async () => {
+    setDesktopActivating("__rollback__");
+    setError("");
+    try {
+      await invoke<DesktopActivationOutcome>("rollback_codex_desktop_profile");
+      await loadProfiles();
+      showToast("The previous GPT app login was restored.");
+    } catch (reason) {
+      const message = String(reason);
+      await loadProfiles();
+      setError(message);
+    } finally {
+      setDesktopActivating("");
+    }
+  }, [loadProfiles, showToast]);
 
   const readyCount =
     inventory?.profiles.filter((profile) => profile.credentialPresent).length ??
@@ -259,6 +367,48 @@ export default function App() {
         </aside>
       ) : null}
 
+      {desktop?.platformSupported ? (
+        <aside className="message message--desktop" role="status">
+          <strong>Windows GPT app</strong>
+          <span>
+            {desktop.message}
+            {desktop.installed
+              ? ` · ${desktop.running ? "Running" : "Stopped"}`
+              : ""}
+          </span>
+          {desktop.rollbackAvailable ? (
+            <div className="desktop-confirmation">
+              <span>
+                Check the account and workspace in the GPT app before keeping
+                this login.
+              </span>
+              <div className="actions">
+                <button
+                  className="button button--primary"
+                  disabled={Boolean(desktopActivating)}
+                  onClick={() => void confirmDesktop()}
+                  type="button"
+                >
+                  {desktopActivating === "__confirm__"
+                    ? "Keeping…"
+                    : "Keep this login"}
+                </button>
+                <button
+                  className="button"
+                  disabled={Boolean(desktopActivating)}
+                  onClick={() => void rollbackDesktop()}
+                  type="button"
+                >
+                  {desktopActivating === "__rollback__"
+                    ? "Restoring…"
+                    : "Undo switch"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </aside>
+      ) : null}
+
       {toast ? (
         <div className="toast" role="status">
           {toast}
@@ -275,8 +425,11 @@ export default function App() {
           {visibleProfiles.map((profile) => (
             <ProfileCard
               activating={activating}
+              desktop={desktop}
+              desktopActivating={desktopActivating}
               key={`${profile.provider}:${profile.profilePath}`}
               onActivate={activate}
+              onActivateDesktop={activateDesktop}
               profile={profile}
             />
           ))}

@@ -11,6 +11,9 @@ use walkdir::WalkDir;
 const MANIFEST_VERSION: u32 = 1;
 const ACTIVE_MARKER: &str = ".openprofiler-active.json";
 const LEGACY_ACTIVE_MARKER: &str = ".profile-switcher-active.json";
+const DESKTOP_ROLLBACK_CREDENTIAL: &str = ".openprofiler-desktop-auth.rollback.json";
+const DESKTOP_ROLLBACK_MARKER: &str = ".openprofiler-desktop-rollback.json";
+const MAX_CREDENTIAL_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ProfileError {
@@ -48,6 +51,18 @@ pub enum ProfileError {
 
     #[error("refusing to activate through symlinked path: {0}")]
     UnsafeActivationPath(PathBuf),
+
+    #[error("unsupported Codex desktop credential at {path}: {reason}")]
+    UnsupportedDesktopCredential { path: PathBuf, reason: String },
+
+    #[error("a Codex desktop rollback is already pending; keep or undo it before switching again")]
+    DesktopRollbackPending,
+
+    #[error("no Codex desktop rollback is available")]
+    DesktopRollbackUnavailable,
+
+    #[error("Codex desktop credential verification failed after activation")]
+    DesktopVerificationFailed,
 }
 
 pub type Result<T> = std::result::Result<T, ProfileError>;
@@ -110,17 +125,39 @@ impl DiscoveryConfig {
         let config_home = env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".config"));
+        let default_codex_profiles_home = Provider::Codex.default_profiles_home(&home);
+        let default_codex_manifest = config_home.join("workbenches/openai-profiles.json");
+        #[cfg(windows)]
+        let (discovered_codex_profiles_home, discovered_codex_manifest) =
+            if default_codex_profiles_home.join("profiles").is_dir() {
+                (
+                    default_codex_profiles_home.clone(),
+                    default_codex_manifest.clone(),
+                )
+            } else {
+                discover_wsl_codex_defaults().unwrap_or_else(|| {
+                    (
+                        default_codex_profiles_home.clone(),
+                        default_codex_manifest.clone(),
+                    )
+                })
+            };
+        #[cfg(not(windows))]
+        let (discovered_codex_profiles_home, discovered_codex_manifest) = (
+            default_codex_profiles_home.clone(),
+            default_codex_manifest.clone(),
+        );
 
         let codex = ProviderConfig {
             provider: Provider::Codex,
             manifest_path: env::var_os("CODEX_PROFILES_MANIFEST")
                 .or_else(|| env::var_os("CHATGPT_PROFILES_MANIFEST"))
                 .map(PathBuf::from)
-                .unwrap_or_else(|| config_home.join("workbenches/openai-profiles.json")),
+                .unwrap_or(discovered_codex_manifest),
             profiles_home: env::var_os("CODEX_PROFILES_HOME")
                 .or_else(|| env::var_os("CHATGPT_PROFILES_HOME"))
                 .map(PathBuf::from)
-                .unwrap_or_else(|| Provider::Codex.default_profiles_home(&home)),
+                .unwrap_or(discovered_codex_profiles_home),
             active_home: env::var_os("OPENPROFILER_CODEX_ACTIVE_HOME")
                 .or_else(|| env::var_os("PROFILE_SWITCHER_CODEX_ACTIVE_HOME"))
                 .map(PathBuf::from)
@@ -145,6 +182,39 @@ impl DiscoveryConfig {
             providers: vec![codex, claude],
         })
     }
+}
+
+#[cfg(windows)]
+fn discover_wsl_codex_defaults() -> Option<(PathBuf, PathBuf)> {
+    let mut candidates = Vec::new();
+    for wsl_root in [r"\\wsl.localhost", r"\\wsl$"] {
+        let Ok(distributions) = fs::read_dir(wsl_root) else {
+            continue;
+        };
+        for distribution in distributions.filter_map(std::result::Result::ok) {
+            let home_root = distribution.path().join("home");
+            let Ok(users) = fs::read_dir(home_root) else {
+                continue;
+            };
+            for user in users.filter_map(std::result::Result::ok) {
+                let user_home = user.path();
+                let profiles_home = user_home.join(".chatgpt-profiles");
+                if profiles_home.join("profiles").is_dir() {
+                    candidates.push((
+                        profiles_home,
+                        user_home.join(".config/workbenches/openai-profiles.json"),
+                    ));
+                }
+            }
+        }
+        if !candidates.is_empty() {
+            break;
+        }
+    }
+
+    candidates.sort();
+    candidates.dedup();
+    (candidates.len() == 1).then(|| candidates.remove(0))
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -196,6 +266,31 @@ pub struct ActivationResult {
     pub restart_required: bool,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexDesktopStatus {
+    pub file_activation_supported: bool,
+    pub credential_store: String,
+    pub eligible_profile_paths: Vec<String>,
+    pub active_profile_paths: Vec<String>,
+    pub rollback_available: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexDesktopActivationResult {
+    pub profile: String,
+    pub outgoing_profiles_updated: usize,
+    pub rollback_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexDesktopRollbackResult {
+    pub restored_previous_credential: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct ProfileManifest {
     version: u32,
@@ -227,6 +322,36 @@ struct ActiveMarker {
     credential_size: u64,
     active_modified_unix_secs: u64,
     active_modified_subsec_nanos: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexCredentialBundle {
+    auth_mode: String,
+    tokens: CodexCredentialTokens,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexCredentialTokens {
+    access_token: String,
+    account_id: String,
+    id_token: String,
+    refresh_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexCredentialIdentity {
+    account_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopRollbackMarker {
+    schema_version: u32,
+    previous_credential_present: bool,
+    selected_profile_path: String,
+    backup_size: Option<u64>,
+    backup_modified_unix_secs: Option<u64>,
+    backup_modified_subsec_nanos: Option<u32>,
 }
 
 pub fn discover_profiles(config: &DiscoveryConfig) -> ProfileInventory {
@@ -335,6 +460,365 @@ pub fn activate_profile(
         profile: profile.name.clone(),
         restart_required: true,
     })
+}
+
+pub fn codex_desktop_status(config: &DiscoveryConfig, desktop_home: &Path) -> CodexDesktopStatus {
+    let Some(provider_config) = provider_config(config, Provider::Codex) else {
+        return CodexDesktopStatus {
+            file_activation_supported: false,
+            credential_store: "unknown".to_string(),
+            eligible_profile_paths: Vec::new(),
+            active_profile_paths: Vec::new(),
+            rollback_available: desktop_rollback_pending(desktop_home),
+            message: "Codex profile discovery is not configured".to_string(),
+        };
+    };
+
+    let credential_store = configured_credential_store(desktop_home);
+    let target_exists = desktop_home
+        .join(Provider::Codex.credential_name())
+        .is_file();
+    let active_identity =
+        read_codex_credential_identity(&desktop_home.join(Provider::Codex.credential_name())).ok();
+    let profiles = codex_profile_credentials(config, provider_config);
+    let mut eligible_profile_paths = profiles
+        .iter()
+        .map(|profile| profile.profile_path.clone())
+        .collect::<Vec<_>>();
+    let mut active_profile_paths = active_identity
+        .as_ref()
+        .map(|identity| {
+            profiles
+                .iter()
+                .filter(|profile| profile.identity == *identity)
+                .map(|profile| profile.profile_path.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    eligible_profile_paths.sort();
+    eligible_profile_paths.dedup();
+    active_profile_paths.sort();
+    active_profile_paths.dedup();
+
+    let file_activation_supported = match credential_store.as_str() {
+        "file" => !target_exists || active_identity.is_some(),
+        "keyring" => false,
+        "auto" | "default" => active_identity.is_some(),
+        _ => false,
+    };
+    let message = match (
+        credential_store.as_str(),
+        file_activation_supported,
+        target_exists,
+    ) {
+        ("keyring", _, _) => {
+            "Windows Credential Manager is configured; use the supported ChatGPT sign-in flow"
+                .to_string()
+        }
+        ("auto" | "default", false, false) => {
+            "No file-based desktop login was found, so Credential Manager cannot be ruled out"
+                .to_string()
+        }
+        (_, false, true) => {
+            "The desktop credential is not a complete reusable ChatGPT login".to_string()
+        }
+        (_, true, _) if eligible_profile_paths.is_empty() => {
+            "No reusable ChatGPT profile credentials are available".to_string()
+        }
+        _ => "File-based GPT app profile switching is ready".to_string(),
+    };
+
+    CodexDesktopStatus {
+        file_activation_supported,
+        credential_store,
+        eligible_profile_paths,
+        active_profile_paths,
+        rollback_available: desktop_rollback_pending(desktop_home),
+        message,
+    }
+}
+
+pub fn activate_codex_desktop_profile(
+    config: &DiscoveryConfig,
+    requested_profile_path: &str,
+    desktop_home: &Path,
+) -> Result<CodexDesktopActivationResult> {
+    validate_profile_path(requested_profile_path, requested_profile_path)?;
+    if desktop_rollback_pending(desktop_home) {
+        return Err(ProfileError::DesktopRollbackPending);
+    }
+
+    let provider_config =
+        provider_config(config, Provider::Codex).ok_or_else(|| ProfileError::UnknownProfile {
+            provider: Provider::Codex,
+            profile_path: requested_profile_path.to_string(),
+        })?;
+    let profiles = codex_profile_credentials(config, provider_config);
+    let selected = profiles
+        .iter()
+        .find(|profile| profile.profile_path == requested_profile_path)
+        .ok_or_else(|| ProfileError::CredentialUnavailable {
+            provider: Provider::Codex,
+            profile: requested_profile_path.to_string(),
+        })?;
+
+    let status = codex_desktop_status(config, desktop_home);
+    if !status.file_activation_supported {
+        return Err(ProfileError::UnsupportedDesktopCredential {
+            path: desktop_home.join(Provider::Codex.credential_name()),
+            reason: status.message,
+        });
+    }
+
+    ensure_safe_active_home(desktop_home)?;
+    let target = desktop_home.join(Provider::Codex.credential_name());
+    let rollback = desktop_home.join(DESKTOP_ROLLBACK_CREDENTIAL);
+    let marker_path = desktop_home.join(DESKTOP_ROLLBACK_MARKER);
+    reject_symlink(&target)?;
+    reject_symlink(&rollback)?;
+    reject_symlink(&marker_path)?;
+
+    let active_identity = if target.is_file() {
+        Some(read_codex_credential_identity(&target)?)
+    } else {
+        None
+    };
+    let mut outgoing_profiles_updated = 0;
+    if let Some(active_identity) = active_identity {
+        for profile in profiles
+            .iter()
+            .filter(|profile| profile.identity == active_identity)
+        {
+            atomic_copy(
+                &target,
+                &profile.credential_path,
+                Provider::Codex,
+                &profile.name,
+            )?;
+            outgoing_profiles_updated += 1;
+        }
+    }
+
+    let previous_credential_present = target.is_file();
+    let (backup_size, backup_modified_unix_secs, backup_modified_subsec_nanos) =
+        if previous_credential_present {
+            atomic_copy(&target, &rollback, Provider::Codex, "desktop rollback")?;
+            let (size, modified_secs, modified_nanos) =
+                credential_stamp(&rollback).ok_or(ProfileError::DesktopRollbackUnavailable)?;
+            (Some(size), Some(modified_secs), Some(modified_nanos))
+        } else {
+            (None, None, None)
+        };
+
+    let marker = DesktopRollbackMarker {
+        schema_version: 1,
+        previous_credential_present,
+        selected_profile_path: selected.profile_path.clone(),
+        backup_size,
+        backup_modified_unix_secs,
+        backup_modified_subsec_nanos,
+    };
+    let marker_bytes =
+        serde_json::to_vec_pretty(&marker).map_err(|source| ProfileError::Write {
+            path: marker_path.clone(),
+            source: io::Error::new(io::ErrorKind::InvalidData, source),
+        })?;
+    atomic_write(&marker_path, &marker_bytes)?;
+
+    let activation_result = (|| {
+        atomic_copy(
+            &selected.credential_path,
+            &target,
+            Provider::Codex,
+            &selected.name,
+        )?;
+        let installed_identity = read_codex_credential_identity(&target)?;
+        if installed_identity != selected.identity {
+            return Err(ProfileError::DesktopVerificationFailed);
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = activation_result {
+        let _ = rollback_codex_desktop_profile(desktop_home);
+        return Err(error);
+    }
+
+    Ok(CodexDesktopActivationResult {
+        profile: selected.name.clone(),
+        outgoing_profiles_updated,
+        rollback_available: true,
+    })
+}
+
+pub fn rollback_codex_desktop_profile(desktop_home: &Path) -> Result<CodexDesktopRollbackResult> {
+    let marker_path = desktop_home.join(DESKTOP_ROLLBACK_MARKER);
+    let marker = read_desktop_rollback_marker(&marker_path)?;
+    let target = desktop_home.join(Provider::Codex.credential_name());
+    let rollback = desktop_home.join(DESKTOP_ROLLBACK_CREDENTIAL);
+
+    if marker.previous_credential_present {
+        let expected_stamp = (
+            marker.backup_size,
+            marker.backup_modified_unix_secs,
+            marker.backup_modified_subsec_nanos,
+        );
+        let actual_stamp = credential_stamp(&rollback)
+            .map(|(size, secs, nanos)| (Some(size), Some(secs), Some(nanos)));
+        if actual_stamp != Some(expected_stamp) {
+            return Err(ProfileError::DesktopRollbackUnavailable);
+        }
+        read_codex_credential_identity(&rollback)?;
+        atomic_copy(&rollback, &target, Provider::Codex, "desktop rollback")?;
+    } else if target.exists() {
+        remove_regular_file(&target)?;
+    }
+
+    remove_regular_file_if_present(&rollback)?;
+    remove_regular_file(&marker_path)?;
+    Ok(CodexDesktopRollbackResult {
+        restored_previous_credential: marker.previous_credential_present,
+    })
+}
+
+pub fn confirm_codex_desktop_profile(desktop_home: &Path) -> Result<()> {
+    let marker_path = desktop_home.join(DESKTOP_ROLLBACK_MARKER);
+    if !marker_path.is_file() {
+        return Err(ProfileError::DesktopRollbackUnavailable);
+    }
+    read_desktop_rollback_marker(&marker_path)?;
+    remove_regular_file_if_present(&desktop_home.join(DESKTOP_ROLLBACK_CREDENTIAL))?;
+    remove_regular_file(&marker_path)
+}
+
+#[derive(Debug, Clone)]
+struct CodexProfileCredential {
+    name: String,
+    profile_path: String,
+    credential_path: PathBuf,
+    identity: CodexCredentialIdentity,
+}
+
+fn provider_config(config: &DiscoveryConfig, provider: Provider) -> Option<&ProviderConfig> {
+    config
+        .providers
+        .iter()
+        .find(|provider_config| provider_config.provider == provider)
+}
+
+fn codex_profile_credentials(
+    config: &DiscoveryConfig,
+    provider_config: &ProviderConfig,
+) -> Vec<CodexProfileCredential> {
+    let profile_root = provider_config.profiles_home.join("profiles");
+    discover_profiles(config)
+        .profiles
+        .into_iter()
+        .filter(|profile| profile.provider == Provider::Codex && profile.credential_present)
+        .filter_map(|profile| {
+            let profile_dir = checked_profile_dir(&profile_root, &profile.profile_path).ok()?;
+            let credential_path = profile_dir.join(Provider::Codex.credential_name());
+            let identity = read_codex_credential_identity(&credential_path).ok()?;
+            Some(CodexProfileCredential {
+                name: profile.name,
+                profile_path: profile.profile_path,
+                credential_path,
+                identity,
+            })
+        })
+        .collect()
+}
+
+fn configured_credential_store(desktop_home: &Path) -> String {
+    let config_path = desktop_home.join("config.toml");
+    let Ok(config) = read_text(&config_path) else {
+        return "default".to_string();
+    };
+
+    config
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == "cli_auth_credentials_store")
+                .then(|| value.split('#').next().unwrap_or_default().trim())
+        })
+        .map(|value| value.trim_matches(['"', '\'']).to_ascii_lowercase())
+        .filter(|value| matches!(value.as_str(), "file" | "keyring" | "auto"))
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn read_codex_credential_identity(path: &Path) -> Result<CodexCredentialIdentity> {
+    let mut file = open_file_no_follow(path)?;
+    let metadata = file.metadata().map_err(|source| ProfileError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_CREDENTIAL_BYTES {
+        return Err(ProfileError::UnsupportedDesktopCredential {
+            path: path.to_path_buf(),
+            reason: "expected a non-empty credential file smaller than 1 MiB".to_string(),
+        });
+    }
+
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|source| ProfileError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    let credential: CodexCredentialBundle = serde_json::from_str(&text).map_err(|source| {
+        ProfileError::UnsupportedDesktopCredential {
+            path: path.to_path_buf(),
+            reason: format!("invalid credential JSON: {source}"),
+        }
+    })?;
+
+    if credential.auth_mode != "chatgpt" {
+        return Err(ProfileError::UnsupportedDesktopCredential {
+            path: path.to_path_buf(),
+            reason: "only complete ChatGPT OAuth credentials can be reused".to_string(),
+        });
+    }
+    if [
+        credential.tokens.access_token.as_str(),
+        credential.tokens.account_id.as_str(),
+        credential.tokens.id_token.as_str(),
+        credential.tokens.refresh_token.as_str(),
+    ]
+    .iter()
+    .any(|value| value.trim().is_empty())
+    {
+        return Err(ProfileError::UnsupportedDesktopCredential {
+            path: path.to_path_buf(),
+            reason: "the ChatGPT OAuth credential bundle is incomplete".to_string(),
+        });
+    }
+
+    Ok(CodexCredentialIdentity {
+        account_id: credential.tokens.account_id,
+    })
+}
+
+fn desktop_rollback_pending(desktop_home: &Path) -> bool {
+    desktop_home.join(DESKTOP_ROLLBACK_MARKER).is_file()
+}
+
+fn read_desktop_rollback_marker(path: &Path) -> Result<DesktopRollbackMarker> {
+    if !path.is_file() {
+        return Err(ProfileError::DesktopRollbackUnavailable);
+    }
+    let text = read_text(path)?;
+    let marker: DesktopRollbackMarker =
+        serde_json::from_str(&text).map_err(|source| ProfileError::Read {
+            path: path.to_path_buf(),
+            source: io::Error::new(io::ErrorKind::InvalidData, source),
+        })?;
+    if marker.schema_version != 1 {
+        return Err(ProfileError::DesktopRollbackUnavailable);
+    }
+    Ok(marker)
 }
 
 fn discover_provider(config: &ProviderConfig) -> (Vec<Profile>, Vec<String>) {
@@ -832,11 +1316,32 @@ fn replace_file(source: &Path, target: &Path) -> Result<()> {
 fn replace_file(source: &Path, target: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        REPLACEFILE_WRITE_THROUGH,
     };
 
     let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
     let target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    if target.exists() {
+        let success = unsafe {
+            ReplaceFileW(
+                target_wide.as_ptr(),
+                source_wide.as_ptr(),
+                std::ptr::null(),
+                REPLACEFILE_WRITE_THROUGH,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if success == 0 {
+            return Err(ProfileError::Write {
+                path: target.to_path_buf(),
+                source: io::Error::last_os_error(),
+            });
+        }
+        return Ok(());
+    }
+
     let success = unsafe {
         MoveFileExW(
             source_wide.as_ptr(),
@@ -858,10 +1363,7 @@ fn normalized_path_key(path: &str) -> String {
 }
 
 fn read_text(path: &Path) -> Result<String> {
-    let mut file = File::open(path).map_err(|source| ProfileError::Read {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let mut file = open_file_no_follow(path)?;
     let mut text = String::new();
     file.read_to_string(&mut text)
         .map_err(|source| ProfileError::Read {
@@ -869,6 +1371,29 @@ fn read_text(path: &Path) -> Result<String> {
             source,
         })?;
     Ok(text)
+}
+
+fn remove_regular_file(path: &Path) -> Result<()> {
+    reject_symlink(path)?;
+    let metadata = fs::symlink_metadata(path).map_err(|source| ProfileError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(ProfileError::UnsafeActivationPath(path.to_path_buf()));
+    }
+    fs::remove_file(path).map_err(|source| ProfileError::Write {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn remove_regular_file_if_present(path: &Path) -> Result<()> {
+    if path.exists() {
+        remove_regular_file(path)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -899,6 +1424,12 @@ mod tests {
     fn write_file(path: &Path, value: &str) {
         fs::create_dir_all(path.parent().expect("test path has parent")).unwrap();
         fs::write(path, value).unwrap();
+    }
+
+    fn codex_auth(account_id: &str, version: &str) -> String {
+        format!(
+            r#"{{"auth_mode":"chatgpt","tokens":{{"access_token":"access-{version}","account_id":"{account_id}","id_token":"id-{version}","refresh_token":"refresh-{version}"}}}}"#
+        )
     }
 
     fn provider_config(config: &DiscoveryConfig, provider: Provider) -> &ProviderConfig {
@@ -1041,6 +1572,181 @@ mod tests {
         let inventory = discover_profiles(&config);
         assert_eq!(inventory.profiles.len(), 1);
         assert!(inventory.profiles[0].active);
+    }
+
+    #[test]
+    fn reports_file_based_desktop_profiles_without_exposing_credentials() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        write_file(
+            &codex.profiles_home.join("profiles/work/auth.json"),
+            &codex_auth("account-work", "work"),
+        );
+        write_file(
+            &codex.profiles_home.join("profiles/personal/auth.json"),
+            "not-a-complete-oauth-bundle",
+        );
+        write_file(
+            &codex.active_home.join("auth.json"),
+            &codex_auth("account-work", "desktop"),
+        );
+
+        let status = codex_desktop_status(&config, &codex.active_home);
+        assert!(status.file_activation_supported);
+        assert_eq!(status.credential_store, "default");
+        assert_eq!(status.eligible_profile_paths, vec!["work"]);
+        assert_eq!(status.active_profile_paths, vec!["work"]);
+        assert!(!status.rollback_available);
+        assert!(!format!("{status:?}").contains("access-work"));
+        assert!(!format!("{status:?}").contains("refresh-work"));
+    }
+
+    #[test]
+    fn refuses_desktop_switching_when_keyring_is_authoritative() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        write_file(
+            &codex.profiles_home.join("profiles/work/auth.json"),
+            &codex_auth("account-work", "work"),
+        );
+        write_file(
+            &codex.active_home.join("auth.json"),
+            &codex_auth("account-work", "desktop"),
+        );
+        write_file(
+            &codex.active_home.join("config.toml"),
+            "cli_auth_credentials_store = \"keyring\"",
+        );
+
+        let status = codex_desktop_status(&config, &codex.active_home);
+        assert!(!status.file_activation_supported);
+        assert_eq!(status.credential_store, "keyring");
+        assert!(matches!(
+            activate_codex_desktop_profile(&config, "work", &codex.active_home),
+            Err(ProfileError::UnsupportedDesktopCredential { .. })
+        ));
+    }
+
+    #[test]
+    fn switches_desktop_credentials_saves_refresh_and_rolls_back() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        let outgoing_profile = codex.profiles_home.join("profiles/work/auth.json");
+        let selected_profile = codex.profiles_home.join("profiles/personal/auth.json");
+        let desktop_auth = codex.active_home.join("auth.json");
+        write_file(
+            &outgoing_profile,
+            &codex_auth("account-work", "stale-profile"),
+        );
+        write_file(
+            &selected_profile,
+            &codex_auth("account-personal", "selected"),
+        );
+        write_file(
+            &desktop_auth,
+            &codex_auth("account-work", "refreshed-desktop"),
+        );
+
+        let result =
+            activate_codex_desktop_profile(&config, "personal", &codex.active_home).unwrap();
+        assert_eq!(result.profile, "personal");
+        assert_eq!(result.outgoing_profiles_updated, 1);
+        assert!(result.rollback_available);
+        assert_eq!(
+            read_codex_credential_identity(&outgoing_profile)
+                .unwrap()
+                .account_id,
+            "account-work"
+        );
+        assert!(fs::read_to_string(outgoing_profile)
+            .unwrap()
+            .contains("refreshed-desktop"));
+        assert_eq!(
+            read_codex_credential_identity(&desktop_auth)
+                .unwrap()
+                .account_id,
+            "account-personal"
+        );
+        assert!(desktop_rollback_pending(&codex.active_home));
+        assert!(matches!(
+            activate_codex_desktop_profile(&config, "work", &codex.active_home),
+            Err(ProfileError::DesktopRollbackPending)
+        ));
+
+        let rollback = rollback_codex_desktop_profile(&codex.active_home).unwrap();
+        assert!(rollback.restored_previous_credential);
+        assert_eq!(
+            read_codex_credential_identity(&desktop_auth)
+                .unwrap()
+                .account_id,
+            "account-work"
+        );
+        assert!(!desktop_rollback_pending(&codex.active_home));
+    }
+
+    #[test]
+    fn confirms_desktop_activation_and_discards_rollback() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        write_file(
+            &codex.profiles_home.join("profiles/work/auth.json"),
+            &codex_auth("account-work", "work"),
+        );
+        write_file(
+            &codex.profiles_home.join("profiles/personal/auth.json"),
+            &codex_auth("account-personal", "personal"),
+        );
+        write_file(
+            &codex.active_home.join("auth.json"),
+            &codex_auth("account-work", "desktop"),
+        );
+
+        activate_codex_desktop_profile(&config, "personal", &codex.active_home).unwrap();
+        confirm_codex_desktop_profile(&codex.active_home).unwrap();
+
+        assert!(!desktop_rollback_pending(&codex.active_home));
+        assert!(matches!(
+            rollback_codex_desktop_profile(&codex.active_home),
+            Err(ProfileError::DesktopRollbackUnavailable)
+        ));
+        assert_eq!(
+            read_codex_credential_identity(&codex.active_home.join("auth.json"))
+                .unwrap()
+                .account_id,
+            "account-personal"
+        );
+    }
+
+    #[test]
+    fn ignores_an_orphaned_desktop_backup_without_a_rollback_marker() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        write_file(
+            &codex.profiles_home.join("profiles/work/auth.json"),
+            &codex_auth("account-work", "work"),
+        );
+        write_file(
+            &codex.profiles_home.join("profiles/personal/auth.json"),
+            &codex_auth("account-personal", "personal"),
+        );
+        write_file(
+            &codex.active_home.join("auth.json"),
+            &codex_auth("account-work", "desktop"),
+        );
+        write_file(
+            &codex.active_home.join(DESKTOP_ROLLBACK_CREDENTIAL),
+            &codex_auth("orphaned-account", "orphaned"),
+        );
+
+        let status = codex_desktop_status(&config, &codex.active_home);
+        assert!(!status.rollback_available);
+        activate_codex_desktop_profile(&config, "personal", &codex.active_home).unwrap();
+        assert!(desktop_rollback_pending(&codex.active_home));
     }
 
     #[test]

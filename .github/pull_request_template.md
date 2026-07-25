@@ -8,7 +8,7 @@
 - [ ] `pnpm build`
 - [ ] `cargo fmt --all --check`
 - [ ] `cargo test -p opensoft-open-profiler-core`
-- [ ] Credential files and values were not read, logged, copied, or committed
+- [ ] Credential values were not printed, logged, transmitted, or committed
 
 ## Security boundary
 

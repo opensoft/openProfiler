@@ -1,86 +1,121 @@
-# Opensoft Profile Switcher
+# Profile Switcher
 
-A local-first desktop manager for the isolated Codex profiles created by
-[workBenches](https://github.com/opensoft/workBenches).
+A local-first desktop application for discovering and activating isolated Codex
+and Claude profiles owned by the current user.
 
-The application reads profile inventory metadata and checks whether a
-profile-local `auth.json` exists and is non-empty. It never reads, returns,
-copies, exports, or commits credential contents.
+Profile Switcher does not create accounts or store a second credential
+database. It relies on profile directories created by
+[workBenches](https://github.com/opensoft/workBenches) or another compatible
+setup, then makes one of those local credentials active in the provider's
+standard user home.
 
-## Initial capabilities
+## Current scope
 
-- Discover `~/.config/workbenches/openai-profiles.json`.
-- Respect `CODEX_PROFILES_MANIFEST` and `CODEX_PROFILES_HOME`.
-- Discover profile-local `.profile.json` metadata as a fallback.
-- Display profile name, aliases, expected email, family, configuration state,
-  and credential-file presence.
-- Generate safe `pcodex` commands for login, status, launch, and logout.
-- Keep all application permissions minimal; the frontend has no arbitrary
-  filesystem or shell access.
+- Discover Codex profiles under `~/.chatgpt-profiles/profiles`.
+- Discover Claude profiles under `~/.claude-profiles/profiles`.
+- Read optional workBenches manifests and `.profile.json` metadata.
+- Find credential-bearing profile directories even when no manifest exists.
+- Show provider, profile name, declared identity, family, aliases, source, and
+  readiness.
+- Activate Codex by atomically replacing `~/.codex/auth.json`.
+- Activate Claude by atomically replacing `~/.claude/.credentials.json`.
+- Record only non-secret active-profile metadata in
+  `.profile-switcher-active.json`.
 
-The generated commands use the existing workBenches launcher:
+Existing Codex or Claude processes may cache their login. Close and reopen the
+provider app after activation. This project switches local Codex and Claude Code
+credentials; it does not switch browser sessions or unrelated ChatGPT/Claude
+consumer-app session stores.
 
-```bash
-pcodex login PROFILE
-pcodex status PROFILE
-pcodex PROFILE
-pcodex logout PROFILE
-```
+## Discovery
+
+The default stores work on Linux, macOS, and Windows because they are resolved
+relative to the current user's home directory.
+
+| Provider | Manifest                                     | Profile store         | Active home |
+| -------- | -------------------------------------------- | --------------------- | ----------- |
+| Codex    | `~/.config/workbenches/openai-profiles.json` | `~/.chatgpt-profiles` | `~/.codex`  |
+| Claude   | `~/.config/workbenches/claude-profiles.json` | `~/.claude-profiles`  | `~/.claude` |
+
+Environment overrides:
+
+| Purpose       | Codex                                                    | Claude                                |
+| ------------- | -------------------------------------------------------- | ------------------------------------- |
+| Manifest      | `CODEX_PROFILES_MANIFEST` or `CHATGPT_PROFILES_MANIFEST` | `CLAUDE_PROFILES_MANIFEST`            |
+| Profile store | `CODEX_PROFILES_HOME` or `CHATGPT_PROFILES_HOME`         | `CLAUDE_PROFILES_HOME`                |
+| Active home   | `PROFILE_SWITCHER_CODEX_ACTIVE_HOME`                     | `PROFILE_SWITCHER_CLAUDE_ACTIVE_HOME` |
+
+Manifest metadata takes precedence, followed by `.profile.json`, then a
+credential-bearing profile directory. A malformed provider manifest is reported
+without hiding valid profiles from the other provider.
+
+## Security model
+
+- Profile metadata and credentials remain on the local device.
+- Credential contents are never returned to the webview, logged, displayed, or
+  sent over the network.
+- Activation copies the selected credential through a mode-`0600` temporary file
+  and atomically replaces the provider's active credential.
+- Profile paths must stay beneath their configured profile root.
+- Symlinked active homes and credential targets are rejected.
+- The Tauri webview receives only two purpose-built commands: list profiles and
+  activate a selected discovered profile.
+- There is no generic shell, filesystem, network, dialog, or updater permission.
+
+Treat all provider credential files as passwords. Never commit, paste, export,
+or share them.
 
 ## Development
 
-Requirements:
+Prerequisites:
 
-- Node.js 22 or newer
-- pnpm 11
 - Rust 1.88 or newer
-- Tauri 2 system dependencies for your operating system
+- Node.js 22
+- pnpm 11
+- Tauri 2 system dependencies for your platform
 
 ```bash
 pnpm install
 pnpm test
 pnpm build
 cargo test -p opensoft-profile-core
+cargo clippy -p opensoft-profile-core --all-targets -- -D warnings
 pnpm tauri dev
 ```
 
-The workBenches `rust-bench` contains the Node and Rust toolchains. From that
-container, this checkout is normally visible at:
+The repository includes a Tauri shell, React frontend, isolated Rust core,
+cross-platform icons, CI, Dependabot, security policy, and contribution guide.
 
-```bash
-cd /workspace/projects/profile-switcher
-COREPACK_HOME="$HOME/.cache/corepack" corepack pnpm install
+## Compatible metadata
+
+Profile Switcher recognizes workBenches version 1 manifests:
+
+```json
+{
+  "version": 1,
+  "profiles": [
+    {
+      "name": "work",
+      "profilePath": "company/work",
+      "family": "company",
+      "email": "developer@example.com",
+      "aliases": ["office"]
+    }
+  ]
+}
 ```
 
-## Profile locations
+Only `name` is required. `profilePath` defaults to `name`; absent family and
+identity metadata are displayed as local or undeclared.
 
-| Purpose      | Default                                      | Override                                                 |
-| ------------ | -------------------------------------------- | -------------------------------------------------------- |
-| Manifest     | `~/.config/workbenches/openai-profiles.json` | `CODEX_PROFILES_MANIFEST` or `CHATGPT_PROFILES_MANIFEST` |
-| Profile home | `~/.chatgpt-profiles`                        | `CODEX_PROFILES_HOME` or `CHATGPT_PROFILES_HOME`         |
+## Project origin
 
-`profilePath` values must be relative and may not contain `.` or `..`
-components. Credential state is determined with filesystem metadata only.
-
-## Security model
-
-- The Tauri frontend can call only two purpose-built commands: inventory
-  discovery and command generation.
-- No shell, filesystem, dialog, updater, or networking plugin is enabled.
-- Profile names are resolved against discovered inventory before a command is
-  generated.
-- Generated commands are displayed and copied for execution in the user's
-  trusted terminal; this first release does not spawn authentication flows.
-- Real account manifests and all credential material remain outside Git.
-
-See [SECURITY.md](SECURITY.md) for reporting and operational guidance.
-
-## Independence
-
-This project is an independent Opensoft implementation based on workBenches
-profile conventions. Do not copy source code, visual assets, documentation, or
-branding from unlicensed account-switching projects.
+This is an independent Apache-2.0 implementation built around public provider
+configuration behavior and workBenches profile conventions. No source code,
+visual assets, text, or credential-handling implementation was copied from
+`Lampese/codex-switcher`, whose repository did not declare a license when this
+project was started.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

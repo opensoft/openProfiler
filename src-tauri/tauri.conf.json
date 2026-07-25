@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Opensoft Profile Switcher",
+  "productName": "Profile Switcher",
   "version": "0.1.0",
   "identifier": "com.opensoft.profile-switcher",
   "build": {
@@ -16,7 +16,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Opensoft Profile Switcher",
+        "title": "Profile Switcher",
         "width": 1180,
         "height": 760,
         "minWidth": 760,
@@ -31,8 +31,8 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "Manage isolated Opensoft Codex profiles",
-    "longDescription": "A local-first desktop manager for isolated Codex profiles created by Opensoft workBenches.",
+    "shortDescription": "Switch between local Codex and Claude profiles",
+    "longDescription": "A local-first desktop manager for user-owned Codex and Claude profiles created by workBenches.",
     "copyright": "Copyright 2026 Opensoft Inc.",
     "license": "Apache-2.0",
     "icon": [

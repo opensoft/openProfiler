@@ -2,7 +2,7 @@
   "name": "@opensoft/profile-switcher",
   "private": true,
   "version": "0.1.0",
-  "description": "Opensoft desktop profile manager for Codex and workBenches AI accounts",
+  "description": "Local desktop switcher for user-owned Codex and Claude profiles",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {

@@ -272,6 +272,14 @@ code {
   box-shadow: 0 18px 40px rgb(0 0 0 / 14%);
 }
 
+.profile-card--codex {
+  border-top-color: #4293bd;
+}
+
+.profile-card--claude {
+  border-top-color: #d28a5b;
+}
+
 .profile-card__topline,
 .profile-card__footer {
   display: flex;
@@ -304,6 +312,12 @@ code {
   border-color: rgb(79 209 172 / 25%);
   color: #7ce6c6;
   background: rgb(25 93 75 / 24%);
+}
+
+.status-chip--active {
+  border-color: rgb(89 184 255 / 38%);
+  color: #9fd7ff;
+  background: rgb(35 105 156 / 25%);
 }
 
 .status-chip--warning {
@@ -378,6 +392,14 @@ code {
   transform: translateY(-1px);
 }
 
+.button:disabled {
+  border-color: #263b49;
+  color: #617787;
+  background: #0b1b28;
+  cursor: default;
+  transform: none;
+}
+
 .button--primary {
   border-color: #278c78;
   color: #dcfff6;
@@ -432,6 +454,11 @@ code {
 .message--error {
   border-color: rgb(218 96 96 / 35%);
   color: #efb1b1;
+}
+
+.message--warning {
+  border-color: rgb(234 179 83 / 28%);
+  color: #eac27f;
 }
 
 .message span {
@@ -519,6 +546,15 @@ code {
   overflow: hidden;
   color: #829bae;
   font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inventory-footer small {
+  overflow: hidden;
+  color: #5f788c;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.64rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

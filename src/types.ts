@@ -1,6 +1,7 @@
-export type CodexAction = "login" | "status" | "launch" | "logout";
+export type Provider = "codex" | "claude";
 
-export interface CodexProfile {
+export interface Profile {
+  provider: Provider;
   name: string;
   email: string;
   family: string;
@@ -9,11 +10,25 @@ export interface CodexProfile {
   status: string;
   configured: boolean;
   credentialPresent: boolean;
-  source: "manifest" | "profile-metadata";
+  active: boolean;
+  source: "manifest" | "profile-metadata" | "profile-directory";
+}
+
+export interface ProviderStore {
+  provider: Provider;
+  manifestPath: string;
+  profilesHome: string;
+  activeHome: string;
+  issues: string[];
 }
 
 export interface ProfileInventory {
-  manifestPath: string;
-  profilesHome: string;
-  profiles: CodexProfile[];
+  stores: ProviderStore[];
+  profiles: Profile[];
+}
+
+export interface ActivationResult {
+  provider: Provider;
+  profile: string;
+  restartRequired: boolean;
 }

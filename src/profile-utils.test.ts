@@ -1,73 +1,78 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ALL_FAMILIES,
+  activationPayload,
+  ALL_PROVIDERS,
   credentialLabel,
   filterProfiles,
-  profileFamilies,
+  providerLabel,
 } from "./profile-utils";
-import type { CodexProfile } from "./types";
+import type { Profile } from "./types";
 
-const profiles: CodexProfile[] = [
+const profiles: Profile[] = [
   {
-    name: "team-001",
-    email: "developer@opensoft.example",
-    family: "opensoft",
-    aliases: ["team"],
-    profilePath: "opensoft/team/team-001",
+    provider: "codex",
+    name: "work",
+    email: "developer@company.example",
+    family: "company",
+    aliases: ["office"],
+    profilePath: "company/work",
     status: "active",
     configured: true,
     credentialPresent: true,
+    active: true,
     source: "manifest",
   },
   {
-    name: "personal-001",
-    email: "developer@example.com",
+    provider: "claude",
+    name: "personal",
+    email: "",
     family: "personal",
     aliases: [],
-    profilePath: "personal/personal-001",
+    profilePath: "personal",
     status: "active",
-    configured: false,
+    configured: true,
     credentialPresent: false,
-    source: "manifest",
+    active: false,
+    source: "profile-metadata",
   },
 ];
 
 describe("profile utilities", () => {
-  it("sorts unique families", () => {
-    expect(profileFamilies(profiles)).toEqual(["opensoft", "personal"]);
-  });
-
-  it("filters by family and searchable metadata", () => {
+  it("filters by provider and searchable metadata", () => {
     expect(
-      filterProfiles(profiles, "opensoft", "").map((item) => item.name),
-    ).toEqual(["team-001"]);
+      filterProfiles(profiles, "codex", "").map((item) => item.name),
+    ).toEqual(["work"]);
     expect(
-      filterProfiles(profiles, ALL_FAMILIES, "TEAM").map((item) => item.name),
-    ).toEqual(["team-001"]);
-    expect(
-      filterProfiles(profiles, ALL_FAMILIES, "example.com").map(
+      filterProfiles(profiles, ALL_PROVIDERS, "CLAUDE").map(
         (item) => item.name,
       ),
-    ).toEqual(["personal-001"]);
-  });
-
-  it("does not reserve a valid family named all", () => {
-    const allFamilyProfile: CodexProfile = {
-      ...profiles[0],
-      name: "all-family-profile",
-      family: "all",
-    };
-    const inventory = [...profiles, allFamilyProfile];
-
+    ).toEqual(["personal"]);
     expect(
-      filterProfiles(inventory, "all", "").map((item) => item.name),
-    ).toEqual(["all-family-profile"]);
-    expect(filterProfiles(inventory, ALL_FAMILIES, "")).toHaveLength(3);
+      filterProfiles(profiles, ALL_PROVIDERS, "company.example").map(
+        (item) => item.name,
+      ),
+    ).toEqual(["work"]);
   });
 
-  it("describes credential state without credential contents", () => {
-    expect(credentialLabel(profiles[0])).toBe("Credential present");
-    expect(credentialLabel(profiles[1])).toBe("Not materialized");
+  it("uses a sentinel that cannot collide with a provider", () => {
+    expect(filterProfiles(profiles, ALL_PROVIDERS, "")).toHaveLength(2);
+  });
+
+  it("describes active and credential states without credential contents", () => {
+    expect(credentialLabel(profiles[0])).toBe("Active");
+    expect(credentialLabel(profiles[1])).toBe("Login required");
+  });
+
+  it("formats provider labels", () => {
+    expect(providerLabel("codex")).toBe("Codex");
+    expect(providerLabel("claude")).toBe("Claude");
+  });
+
+  it("uses Tauri's camel-case command argument names", () => {
+    expect(activationPayload(profiles[0])).toEqual({
+      provider: "codex",
+      profilePath: "company/work",
+    });
   });
 });

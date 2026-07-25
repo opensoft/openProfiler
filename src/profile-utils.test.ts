@@ -52,6 +52,20 @@ describe("profile utilities", () => {
     ).toEqual(["personal-001"]);
   });
 
+  it("does not reserve a valid family named all", () => {
+    const allFamilyProfile: CodexProfile = {
+      ...profiles[0],
+      name: "all-family-profile",
+      family: "all",
+    };
+    const inventory = [...profiles, allFamilyProfile];
+
+    expect(
+      filterProfiles(inventory, "all", "").map((item) => item.name),
+    ).toEqual(["all-family-profile"]);
+    expect(filterProfiles(inventory, ALL_FAMILIES, "")).toHaveLength(3);
+  });
+
   it("describes credential state without credential contents", () => {
     expect(credentialLabel(profiles[0])).toBe("Credential present");
     expect(credentialLabel(profiles[1])).toBe("Not materialized");

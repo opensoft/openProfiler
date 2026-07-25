@@ -1,6 +1,6 @@
 import type { CodexProfile } from "./types";
 
-export const ALL_FAMILIES = "all";
+export const ALL_FAMILIES = "__all__";
 
 export function profileFamilies(profiles: CodexProfile[]): string[] {
   return [...new Set(profiles.map((profile) => profile.family))].sort((a, b) =>

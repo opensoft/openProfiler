@@ -107,6 +107,11 @@ export default function App() {
     void loadProfiles();
   }, [loadProfiles]);
 
+  const showToast = useCallback((message: string) => {
+    setCopied(message);
+    window.setTimeout(() => setCopied(""), 2600);
+  }, []);
+
   const families = useMemo(
     () => profileFamilies(inventory?.profiles ?? []),
     [inventory],
@@ -127,16 +132,15 @@ export default function App() {
         setCommandPreview(command);
         try {
           await navigator.clipboard.writeText(command);
-          setCopied(`${command} copied`);
+          showToast(`${command} copied`);
         } catch {
-          setCopied("Command ready to copy");
+          showToast("Command ready to copy");
         }
-        window.setTimeout(() => setCopied(""), 2600);
       } catch (reason) {
         setError(String(reason));
       }
     },
-    [],
+    [showToast],
   );
 
   const readyCount =
@@ -241,9 +245,9 @@ export default function App() {
             onClick={() => {
               void navigator.clipboard
                 .writeText(commandPreview)
-                .then(() => setCopied(`${commandPreview} copied`))
+                .then(() => showToast(`${commandPreview} copied`))
                 .catch(() =>
-                  setCopied("Select the command and copy it manually"),
+                  showToast("Select the command and copy it manually"),
                 );
             }}
             type="button"

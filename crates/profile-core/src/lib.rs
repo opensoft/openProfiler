@@ -291,6 +291,32 @@ fn validate_required(profile: &ManifestProfile) -> Result<()> {
         }
     }
 
+    validate_identifier(&profile.name, "name", &profile.name)?;
+    validate_identifier(&profile.name, "family", &profile.family)?;
+    for alias in &profile.aliases {
+        validate_identifier(&profile.name, "alias", alias)?;
+    }
+
+    Ok(())
+}
+
+fn validate_identifier(profile: &str, field: &str, value: &str) -> Result<()> {
+    let mut characters = value.chars();
+    let valid = characters
+        .next()
+        .is_some_and(|character| character.is_ascii_alphanumeric())
+        && characters
+            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character));
+
+    if !valid {
+        return Err(ProfileError::InvalidProfile {
+            profile: profile.to_string(),
+            reason: format!(
+                "{field} must start with an ASCII letter or number and contain only letters, numbers, hyphens, underscores, or dots"
+            ),
+        });
+    }
+
     Ok(())
 }
 
@@ -421,6 +447,28 @@ mod tests {
 
         let error = discover_codex_profiles(&config).unwrap_err();
         assert!(matches!(error, ProfileError::InvalidProfile { .. }));
+    }
+
+    #[test]
+    fn rejects_option_like_profile_names_and_aliases() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        write_file(
+            &config.manifest_path,
+            r#"{
+              "version": 1,
+              "profiles": [{
+                "name": "safe-profile",
+                "family": "opensoft",
+                "email": "developer@opensoft.example",
+                "aliases": ["--option"]
+              }]
+            }"#,
+        );
+
+        let error = discover_codex_profiles(&config).unwrap_err();
+        assert!(matches!(error, ProfileError::InvalidProfile { .. }));
+        assert!(error.to_string().contains("alias must start"));
     }
 
     #[test]

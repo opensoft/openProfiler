@@ -252,8 +252,8 @@ export default function App() {
       {issues.length ? (
         <aside className="message message--warning" role="status">
           <strong>Some profile metadata could not be loaded</strong>
-          {issues.slice(0, 4).map((issue) => (
-            <span key={issue}>{issue}</span>
+          {issues.slice(0, 4).map((issue, index) => (
+            <span key={`${index}:${issue}`}>{issue}</span>
           ))}
         </aside>
       ) : null}

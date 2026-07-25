@@ -680,10 +680,7 @@ fn ensure_safe_active_home(path: &Path) -> Result<()> {
 }
 
 fn atomic_copy(source: &Path, target: &Path, provider: Provider, profile: &str) -> Result<()> {
-    let mut input = File::open(source).map_err(|source_error| ProfileError::Read {
-        path: source.to_path_buf(),
-        source: source_error,
-    })?;
+    let mut input = open_credential_source(source)?;
     if !input
         .metadata()
         .map(|metadata| metadata.is_file() && metadata.len() > 0)
@@ -709,6 +706,63 @@ fn atomic_copy(source: &Path, target: &Path, provider: Provider, profile: &str) 
 
     replace_file(&temp, target).inspect_err(|_| {
         let _ = fs::remove_file(&temp);
+    })
+}
+
+fn open_credential_source(path: &Path) -> Result<File> {
+    reject_symlink(path)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::mem::size_of;
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = options.open(path).map_err(|source| ProfileError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let mut information = FILE_ATTRIBUTE_TAG_INFO {
+            FileAttributes: 0,
+            ReparseTag: 0,
+        };
+        let success = unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle(),
+                FileAttributeTagInfo,
+                (&mut information as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+                size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+            )
+        };
+        if success == 0 {
+            return Err(ProfileError::Read {
+                path: path.to_path_buf(),
+                source: io::Error::last_os_error(),
+            });
+        }
+        if information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(ProfileError::UnsafeActivationPath(path.to_path_buf()));
+        }
+        return Ok(file);
+    }
+
+    #[cfg(not(windows))]
+    options.open(path).map_err(|source| ProfileError::Read {
+        path: path.to_path_buf(),
+        source,
     })
 }
 
@@ -1002,6 +1056,27 @@ mod tests {
             Err(ProfileError::UnsafeActivationPath(_))
         ));
         assert_eq!(fs::read_to_string(outside).unwrap(), "preserve-me");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symlinked_source_credential() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        let source = codex.profiles_home.join("profiles/work/auth.json");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        let outside = temp.path().join("outside-source");
+        write_file(&outside, "do-not-copy");
+        symlink(&outside, &source).unwrap();
+
+        assert!(discover_profiles(&config).profiles.is_empty());
+        assert!(matches!(
+            open_credential_source(&source),
+            Err(ProfileError::UnsafeActivationPath(_))
+        ));
     }
 
     #[test]

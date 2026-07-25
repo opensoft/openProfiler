@@ -13,7 +13,7 @@ export function filterProfiles(
   family: string,
   query: string,
 ): CodexProfile[] {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const normalizedQuery = query.trim().toLowerCase();
 
   return profiles.filter((profile) => {
     if (family !== ALL_FAMILIES && profile.family !== family) {
@@ -30,7 +30,7 @@ export function filterProfiles(
       profile.family,
       profile.profilePath,
       ...profile.aliases,
-    ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
+    ].some((value) => value.toLowerCase().includes(normalizedQuery));
   });
 }
 

@@ -201,18 +201,17 @@ pub fn build_codex_command(
     requested: &str,
     action: CodexAction,
 ) -> Result<String> {
-    let requested = requested.to_lowercase();
     let profile = inventory
         .profiles
         .iter()
         .find(|profile| {
-            profile.name.eq_ignore_ascii_case(&requested)
+            profile.name.eq_ignore_ascii_case(requested)
                 || profile
                     .aliases
                     .iter()
-                    .any(|alias| alias.eq_ignore_ascii_case(&requested))
+                    .any(|alias| alias.eq_ignore_ascii_case(requested))
         })
-        .ok_or_else(|| ProfileError::UnknownProfile(requested.clone()))?;
+        .ok_or_else(|| ProfileError::UnknownProfile(requested.to_string()))?;
 
     let profile_name = shell_quote(&profile.name);
     let command = match action {
@@ -476,5 +475,18 @@ mod tests {
     #[test]
     fn quotes_nonstandard_profile_names() {
         assert_eq!(shell_quote("team alpha's"), "'team alpha'\"'\"'s'");
+    }
+
+    #[test]
+    fn preserves_unknown_profile_spelling_in_errors() {
+        let inventory = ProfileInventory {
+            manifest_path: PathBuf::from("/tmp/manifest"),
+            profiles_home: PathBuf::from("/tmp/profiles"),
+            profiles: Vec::new(),
+        };
+
+        let error =
+            build_codex_command(&inventory, "Missing-Profile", CodexAction::Launch).unwrap_err();
+        assert_eq!(error.to_string(), "unknown Codex profile: Missing-Profile");
     }
 }

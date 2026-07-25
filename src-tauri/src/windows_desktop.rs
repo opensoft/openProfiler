@@ -78,7 +78,7 @@ pub fn stop_gracefully() -> io::Result<()> {
 
     Err(io::Error::new(
         io::ErrorKind::WouldBlock,
-        "ChatGPT is still running; quit it from the system tray and try again",
+        "The GPT desktop app is still running; quit it from the system tray and try again",
     ))
 }
 

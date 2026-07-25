@@ -548,7 +548,11 @@ export default function App() {
         onRollback={rollbackDesktop}
       />
 
-      {toast ? <output className="toast">{toast}</output> : null}
+      {toast ? (
+        <output aria-live="polite" className="toast">
+          {toast}
+        </output>
+      ) : null}
 
       <ProfileResults
         activating={activating}

@@ -63,6 +63,14 @@ pub enum ProfileError {
 
     #[error("Codex desktop credential verification failed after activation")]
     DesktopVerificationFailed,
+
+    #[error(
+        "Codex desktop activation failed ({activation}); automatic rollback also failed ({rollback})"
+    )]
+    DesktopRecoveryFailed {
+        activation: Box<ProfileError>,
+        rollback: Box<ProfileError>,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ProfileError>;
@@ -658,8 +666,13 @@ pub fn activate_codex_desktop_profile(
     })();
 
     if let Err(error) = activation_result {
-        let _ = rollback_codex_desktop_profile(desktop_home);
-        return Err(error);
+        return match rollback_codex_desktop_profile(desktop_home) {
+            Ok(_) => Err(error),
+            Err(rollback) => Err(ProfileError::DesktopRecoveryFailed {
+                activation: Box::new(error),
+                rollback: Box::new(rollback),
+            }),
+        };
     }
 
     Ok(CodexDesktopActivationResult {
@@ -701,9 +714,6 @@ pub fn rollback_codex_desktop_profile(desktop_home: &Path) -> Result<CodexDeskto
 
 pub fn confirm_codex_desktop_profile(desktop_home: &Path) -> Result<()> {
     let marker_path = desktop_home.join(DESKTOP_ROLLBACK_MARKER);
-    if !marker_path.is_file() {
-        return Err(ProfileError::DesktopRollbackUnavailable);
-    }
     read_desktop_rollback_marker(&marker_path)?;
     remove_regular_file_if_present(&desktop_home.join(DESKTOP_ROLLBACK_CREDENTIAL))?;
     remove_regular_file(&marker_path)
@@ -851,12 +861,26 @@ fn read_codex_credential_identity(path: &Path) -> Result<CodexCredentialIdentity
 }
 
 fn desktop_rollback_pending(desktop_home: &Path) -> bool {
-    desktop_home.join(DESKTOP_ROLLBACK_MARKER).is_file()
+    match fs::symlink_metadata(desktop_home.join(DESKTOP_ROLLBACK_MARKER)) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(_) => true,
+    }
 }
 
 fn read_desktop_rollback_marker(path: &Path) -> Result<DesktopRollbackMarker> {
-    if !path.is_file() {
-        return Err(ProfileError::DesktopRollbackUnavailable);
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => return Err(ProfileError::UnsafeActivationPath(path.to_path_buf())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(ProfileError::DesktopRollbackUnavailable);
+        }
+        Err(source) => {
+            return Err(ProfileError::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
     }
     let text = read_text(path)?;
     let marker: DesktopRollbackMarker =
@@ -1724,6 +1748,26 @@ mod tests {
         assert!(matches!(
             remove_regular_file_if_present(&dangling),
             Err(ProfileError::UnsafeActivationPath(path)) if path == dangling
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn treats_a_symlinked_rollback_marker_as_an_unsafe_pending_transaction() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let marker = temp.path().join(DESKTOP_ROLLBACK_MARKER);
+        symlink(temp.path().join("missing-marker.json"), &marker).unwrap();
+
+        assert!(desktop_rollback_pending(temp.path()));
+        assert!(matches!(
+            rollback_codex_desktop_profile(temp.path()),
+            Err(ProfileError::UnsafeActivationPath(path)) if path == marker
+        ));
+        assert!(matches!(
+            confirm_codex_desktop_profile(temp.path()),
+            Err(ProfileError::UnsafeActivationPath(path)) if path == marker
         ));
     }
 

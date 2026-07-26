@@ -135,6 +135,8 @@ impl DiscoveryConfig {
             .unwrap_or_else(|| home.join(".config"));
         let default_codex_profiles_home = Provider::Codex.default_profiles_home(&home);
         let default_codex_manifest = config_home.join("workbenches/openai-profiles.json");
+        let default_claude_profiles_home = Provider::Claude.default_profiles_home(&home);
+        let default_claude_manifest = config_home.join("workbenches/claude-profiles.json");
         #[cfg(windows)]
         let (discovered_codex_profiles_home, discovered_codex_manifest) =
             if default_codex_profiles_home.join("profiles").is_dir() {
@@ -143,7 +145,7 @@ impl DiscoveryConfig {
                     default_codex_manifest.clone(),
                 )
             } else {
-                discover_wsl_codex_defaults().unwrap_or_else(|| {
+                discover_wsl_defaults(Provider::Codex).unwrap_or_else(|| {
                     (
                         default_codex_profiles_home.clone(),
                         default_codex_manifest.clone(),
@@ -154,6 +156,26 @@ impl DiscoveryConfig {
         let (discovered_codex_profiles_home, discovered_codex_manifest) = (
             default_codex_profiles_home.clone(),
             default_codex_manifest.clone(),
+        );
+        #[cfg(windows)]
+        let (discovered_claude_profiles_home, discovered_claude_manifest) =
+            if default_claude_profiles_home.join("profiles").is_dir() {
+                (
+                    default_claude_profiles_home.clone(),
+                    default_claude_manifest.clone(),
+                )
+            } else {
+                discover_wsl_defaults(Provider::Claude).unwrap_or_else(|| {
+                    (
+                        default_claude_profiles_home.clone(),
+                        default_claude_manifest.clone(),
+                    )
+                })
+            };
+        #[cfg(not(windows))]
+        let (discovered_claude_profiles_home, discovered_claude_manifest) = (
+            default_claude_profiles_home.clone(),
+            default_claude_manifest.clone(),
         );
 
         let codex = ProviderConfig {
@@ -176,10 +198,10 @@ impl DiscoveryConfig {
             provider: Provider::Claude,
             manifest_path: env::var_os("CLAUDE_PROFILES_MANIFEST")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| config_home.join("workbenches/claude-profiles.json")),
+                .unwrap_or(discovered_claude_manifest),
             profiles_home: env::var_os("CLAUDE_PROFILES_HOME")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| Provider::Claude.default_profiles_home(&home)),
+                .unwrap_or(discovered_claude_profiles_home),
             active_home: env::var_os("OPENPROFILER_CLAUDE_ACTIVE_HOME")
                 .or_else(|| env::var_os("PROFILE_SWITCHER_CLAUDE_ACTIVE_HOME"))
                 .map(PathBuf::from)
@@ -193,36 +215,90 @@ impl DiscoveryConfig {
 }
 
 #[cfg(windows)]
-fn discover_wsl_codex_defaults() -> Option<(PathBuf, PathBuf)> {
+fn discover_wsl_defaults(provider: Provider) -> Option<(PathBuf, PathBuf)> {
     let mut candidates = Vec::new();
-    for wsl_root in [r"\\wsl.localhost", r"\\wsl$"] {
-        let Ok(distributions) = fs::read_dir(wsl_root) else {
-            continue;
-        };
-        for distribution in distributions.filter_map(std::result::Result::ok) {
-            let home_root = distribution.path().join("home");
+    for distribution in wsl_distribution_names() {
+        for wsl_root in [r"\\wsl.localhost", r"\\wsl$"] {
+            let home_root = PathBuf::from(format!(r"{wsl_root}\{distribution}\home"));
             let Ok(users) = fs::read_dir(home_root) else {
                 continue;
             };
+            let mut found_in_distribution = false;
             for user in users.filter_map(std::result::Result::ok) {
                 let user_home = user.path();
-                let profiles_home = user_home.join(".chatgpt-profiles");
+                let profiles_home = provider.default_profiles_home(&user_home);
                 if profiles_home.join("profiles").is_dir() {
                     candidates.push((
                         profiles_home,
-                        user_home.join(".config/workbenches/openai-profiles.json"),
+                        user_home.join(".config/workbenches").join(match provider {
+                            Provider::Codex => "openai-profiles.json",
+                            Provider::Claude => "claude-profiles.json",
+                        }),
                     ));
+                    found_in_distribution = true;
                 }
             }
-        }
-        if !candidates.is_empty() {
-            break;
+            if found_in_distribution {
+                break;
+            }
         }
     }
 
     candidates.sort();
     candidates.dedup();
     (candidates.len() == 1).then(|| candidates.remove(0))
+}
+
+#[cfg(windows)]
+fn wsl_distribution_names() -> Vec<String> {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = std::process::Command::new("wsl.exe");
+    command
+        .args(["--list", "--quiet"])
+        .creation_flags(CREATE_NO_WINDOW);
+    let Ok(output) = command.output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    parse_wsl_distribution_names(&output.stdout)
+}
+
+#[cfg(windows)]
+fn parse_wsl_distribution_names(bytes: &[u8]) -> Vec<String> {
+    decode_wsl_output(bytes)
+        .lines()
+        .map(str::trim)
+        .filter(|name| {
+            !name.is_empty()
+                && *name != "."
+                && *name != ".."
+                && !name.contains('\\')
+                && !name.contains('/')
+                && !name.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(windows)]
+fn decode_wsl_output(bytes: &[u8]) -> String {
+    let looks_utf16_le =
+        bytes.starts_with(&[0xff, 0xfe]) || bytes.chunks_exact(2).any(|pair| pair[1] == 0);
+    if !looks_utf16_le {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+
+    let start = usize::from(bytes.starts_with(&[0xff, 0xfe])) * 2;
+    let units = bytes[start..]
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&units)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1515,6 +1591,29 @@ mod tests {
             .iter()
             .find(|item| item.provider == provider)
             .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_utf16_wsl_distribution_names_safely() {
+        let bytes = "Ubuntu-24.04\r\ndocker-desktop\r\n..\\escape\r\n"
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parse_wsl_distribution_names(&bytes),
+            vec!["Ubuntu-24.04", "docker-desktop"]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_utf8_wsl_distribution_names() {
+        assert_eq!(
+            parse_wsl_distribution_names(b"Ubuntu\r\nUbuntu-Preview\r\n"),
+            vec!["Ubuntu", "Ubuntu-Preview"]
+        );
     }
 
     #[test]

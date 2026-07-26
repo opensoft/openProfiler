@@ -57,9 +57,10 @@ supported logout/sign-in flow in control. See the official
 [Codex authentication guide](https://learn.chatgpt.com/docs/auth) for the
 supported credential-store modes.
 
-On Windows, when `%USERPROFILE%\.chatgpt-profiles` is absent and exactly one WSL
-profile store exists, openProfiler discovers it through `\\wsl.localhost`.
-Set the profile-store environment variables below when more than one WSL store
+On Windows, when the provider's profile store is absent from `%USERPROFILE%`,
+openProfiler enumerates registered WSL distributions and discovers exactly one
+Codex or Claude store through its distro-specific `\\wsl.localhost` path. Set
+the profile-store environment variables below when more than one WSL store
 exists.
 
 ## Discovery
@@ -140,7 +141,7 @@ cross-platform icons, CI, Dependabot, security policy, and contribution guide.
 Version tags publish Windows installers through the
 [`Windows Release`](.github/workflows/windows-release.yml) GitHub Actions
 workflow. The tag must match the version in `src-tauri/tauri.conf.json`; for
-example, version `0.1.0` is released with tag `v0.1.0`.
+example, version `0.1.1` is released with tag `v0.1.1`.
 
 The tagged GitHub prerelease contains:
 

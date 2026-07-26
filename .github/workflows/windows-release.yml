@@ -54,11 +54,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Validate release version
-        id: version
         shell: pwsh
         run: |
           $appVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          "app_version=$appVersion" >> $env:GITHUB_OUTPUT
 
           if ("${{ github.ref_type }}" -eq "tag") {
             $expectedTag = "v$appVersion"
@@ -130,22 +128,35 @@ jobs:
           Install the NSIS `-setup.exe` package for the standard per-user installation and Start-menu shortcut.
           "@ | Set-Content release-notes.md
 
-          $arguments = @(
-            "release",
-            "create",
-            "${{ github.ref_name }}"
-          )
-          $arguments += $assets.FullName
-          $arguments += @(
-            "--title",
-            "openProfiler ${{ github.ref_name }}",
-            "--notes-file",
-            "release-notes.md",
-            "--prerelease",
-            "--verify-tag"
-          )
+          $tag = "${{ github.ref_name }}"
+          & gh release view $tag --json tagName *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
 
-          & gh @arguments
+          if ($releaseExists) {
+            $arguments = @("release", "upload", $tag)
+            $arguments += $assets.FullName
+            $arguments += "--clobber"
+            & gh @arguments
+            if ($LASTEXITCODE -eq 0) {
+              & gh release edit $tag `
+                --title "openProfiler $tag" `
+                --notes-file release-notes.md `
+                --prerelease
+            }
+          } else {
+            $arguments = @("release", "create", $tag)
+            $arguments += $assets.FullName
+            $arguments += @(
+              "--title",
+              "openProfiler $tag",
+              "--notes-file",
+              "release-notes.md",
+              "--prerelease",
+              "--verify-tag"
+            )
+            & gh @arguments
+          }
+
           if ($LASTEXITCODE -ne 0) {
             throw "GitHub CLI failed to publish the release"
           }

@@ -142,11 +142,13 @@ Version tags publish Windows installers through the
 workflow. The tag must match the version in `src-tauri/tauri.conf.json`; for
 example, version `0.1.0` is released with tag `v0.1.0`.
 
-The release contains:
+The tagged GitHub Release contains:
 
 - an NSIS `-setup.exe` installer for the standard per-user installation;
-- an MSI installer;
-- retained GitHub Actions artifacts for the exact workflow run.
+- an MSI installer.
+
+Every build also retains both installers as GitHub Actions artifacts on the
+exact workflow run.
 
 The NSIS installer creates an **openProfiler** Start-menu shortcut. These
 preview installers are not code-signed yet, so Windows SmartScreen may display

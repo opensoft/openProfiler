@@ -141,7 +141,7 @@ cross-platform icons, CI, Dependabot, security policy, and contribution guide.
 Version tags publish Windows installers through the
 [`Windows Release`](.github/workflows/windows-release.yml) GitHub Actions
 workflow. The tag must match the version in `src-tauri/tauri.conf.json`; for
-example, version `0.1.1` is released with tag `v0.1.1`.
+example, version `0.1.2` is released with tag `v0.1.2`.
 
 The tagged GitHub prerelease contains:
 

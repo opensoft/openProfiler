@@ -86,6 +86,38 @@ jobs:
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: openProfiler-[version]-[platform]-[arch]-[bundle]
 
+      - name: Verify Windows GUI subsystem
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $package = $metadata.packages | Where-Object name -eq "opensoft-open-profiler"
+          $binaryName = ($package.targets | Where-Object { $_.kind -contains "bin" }).name
+          $binaryPath = Join-Path "target/release" "$binaryName.exe"
+
+          if (-not (Test-Path $binaryPath)) {
+            throw "Built application binary was not found at $binaryPath"
+          }
+
+          $stream = [System.IO.File]::OpenRead($binaryPath)
+          $reader = [System.IO.BinaryReader]::new($stream)
+          try {
+            $stream.Position = 0x3c
+            $peOffset = $reader.ReadInt32()
+            $stream.Position = $peOffset
+            if ($reader.ReadUInt32() -ne 0x00004550) {
+              throw "$binaryPath does not contain a valid PE signature"
+            }
+
+            $stream.Position = $peOffset + 24 + 68
+            $subsystem = $reader.ReadUInt16()
+            if ($subsystem -ne 2) {
+              throw "$binaryPath uses PE subsystem $subsystem; expected 2 (WINDOWS_GUI)"
+            }
+          } finally {
+            $reader.Dispose()
+            $stream.Dispose()
+          }
+
   publish-release:
     name: Publish GitHub prerelease
     if: github.event_name == 'push' && github.ref_type == 'tag'

@@ -1,6 +1,6 @@
 [package]
 name = "opensoft-open-profiler-core"
-version = "0.1.1"
+version = "0.1.2"
 description = "Secure LLM profile discovery and activation for openProfiler"
 edition.workspace = true
 license.workspace = true

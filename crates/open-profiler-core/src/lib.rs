@@ -14,6 +14,7 @@ const LEGACY_ACTIVE_MARKER: &str = ".profile-switcher-active.json";
 const DESKTOP_ROLLBACK_CREDENTIAL: &str = ".openprofiler-desktop-auth.rollback.json";
 const DESKTOP_ROLLBACK_MARKER: &str = ".openprofiler-desktop-rollback.json";
 const MAX_CREDENTIAL_BYTES: u64 = 1024 * 1024;
+const MAX_PROFILE_DIRECTORY_DEPTH: usize = 7;
 
 #[derive(Debug, Error)]
 pub enum ProfileError {
@@ -608,6 +609,15 @@ pub fn activate_profile(
 }
 
 pub fn codex_desktop_status(config: &DiscoveryConfig, desktop_home: &Path) -> CodexDesktopStatus {
+    let inventory = discover_profiles(config);
+    codex_desktop_status_from_inventory(config, desktop_home, &inventory)
+}
+
+pub fn codex_desktop_status_from_inventory(
+    config: &DiscoveryConfig,
+    desktop_home: &Path,
+    inventory: &ProfileInventory,
+) -> CodexDesktopStatus {
     let Some(provider_config) = provider_config(config, Provider::Codex) else {
         return CodexDesktopStatus {
             file_activation_supported: false,
@@ -620,7 +630,7 @@ pub fn codex_desktop_status(config: &DiscoveryConfig, desktop_home: &Path) -> Co
     };
 
     let credential_state = codex_desktop_credential_state(desktop_home);
-    let profiles = codex_profile_credentials(config, provider_config);
+    let profiles = codex_profile_credentials_from_inventory(inventory, provider_config);
     let mut eligible_profile_paths = profiles
         .iter()
         .map(|profile| profile.profile_path.clone())
@@ -867,18 +877,26 @@ fn codex_profile_credentials(
     config: &DiscoveryConfig,
     provider_config: &ProviderConfig,
 ) -> Vec<CodexProfileCredential> {
+    let inventory = discover_profiles(config);
+    codex_profile_credentials_from_inventory(&inventory, provider_config)
+}
+
+fn codex_profile_credentials_from_inventory(
+    inventory: &ProfileInventory,
+    provider_config: &ProviderConfig,
+) -> Vec<CodexProfileCredential> {
     let profile_root = provider_config.profiles_home.join("profiles");
-    discover_profiles(config)
+    inventory
         .profiles
-        .into_iter()
+        .iter()
         .filter(|profile| profile.provider == Provider::Codex && profile.credential_present)
         .filter_map(|profile| {
             let profile_dir = checked_profile_dir(&profile_root, &profile.profile_path).ok()?;
             let credential_path = profile_dir.join(Provider::Codex.credential_name());
             let identity = read_codex_credential_identity(&credential_path).ok()?;
             Some(CodexProfileCredential {
-                name: profile.name,
-                profile_path: profile.profile_path,
+                name: profile.name.clone(),
+                profile_path: profile.profile_path.clone(),
                 credential_path,
                 identity,
             })
@@ -1052,66 +1070,66 @@ fn discover_provider(config: &ProviderConfig) -> (Vec<Profile>, Vec<String>) {
 
     let profile_root = config.profiles_home.join("profiles");
     if profile_root.is_dir() {
-        for entry in WalkDir::new(&profile_root)
-            .min_depth(2)
-            .max_depth(8)
+        let mut entries = WalkDir::new(&profile_root)
+            .min_depth(1)
+            .max_depth(MAX_PROFILE_DIRECTORY_DEPTH)
             .follow_links(false)
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-            .filter(|entry| entry.file_type().is_file() && entry.file_name() == ".profile.json")
-        {
-            let metadata_path = entry.into_path();
-            let result = read_manifest_profile(&metadata_path).and_then(|mut profile| {
-                if profile.profile_path.is_none() {
-                    let parent =
-                        metadata_path
-                            .parent()
-                            .ok_or_else(|| ProfileError::InvalidProfile {
-                                profile: profile.name.clone(),
-                                reason: "metadata file has no parent directory".to_string(),
-                            })?;
-                    let relative = parent
-                        .strip_prefix(&profile_root)
-                        .map_err(|_| ProfileError::EscapedProfileRoot(parent.to_path_buf()))?;
-                    profile.profile_path = Some(relative.to_string_lossy().into_owned());
-                }
-                resolve_profile(
-                    profile,
-                    config,
-                    ProfileSource::ProfileMetadata,
-                    &active_marker,
-                )
-            });
+            .into_iter();
 
-            match result {
-                Ok(profile) => {
-                    profiles
-                        .entry(normalized_path_key(&profile.profile_path))
-                        .or_insert(profile);
-                }
-                Err(error) => issues.push(error.to_string()),
+        while let Some(entry) = entries.next() {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            if !entry.file_type().is_dir() {
+                continue;
             }
-        }
 
-        for entry in WalkDir::new(&profile_root)
-            .min_depth(2)
-            .max_depth(8)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-            .filter(|entry| {
-                entry.file_type().is_file()
-                    && entry.file_name() == config.provider.credential_name()
-            })
-        {
-            let credential_path = entry.into_path();
-            let Some(parent) = credential_path.parent() else {
+            let profile_dir = entry.into_path();
+            let metadata_path = profile_dir.join(".profile.json");
+            let credential_path = profile_dir.join(config.provider.credential_name());
+            let has_metadata = ensure_regular_nonempty_file(&metadata_path).is_some();
+            let has_credential = ensure_regular_nonempty_file(&credential_path).is_some();
+            if !has_metadata && !has_credential {
+                continue;
+            }
+
+            // A profile owns everything beneath its directory. Avoid walking
+            // provider caches, histories, logs, and databases over WSL UNC.
+            entries.skip_current_dir();
+
+            if has_metadata {
+                let result = read_manifest_profile(&metadata_path).and_then(|mut profile| {
+                    if profile.profile_path.is_none() {
+                        let relative = profile_dir
+                            .strip_prefix(&profile_root)
+                            .map_err(|_| ProfileError::EscapedProfileRoot(profile_dir.clone()))?;
+                        profile.profile_path = Some(relative_profile_path(relative));
+                    }
+                    resolve_profile(
+                        profile,
+                        config,
+                        ProfileSource::ProfileMetadata,
+                        &active_marker,
+                    )
+                });
+
+                match result {
+                    Ok(profile) => {
+                        profiles
+                            .entry(normalized_path_key(&profile.profile_path))
+                            .or_insert(profile);
+                    }
+                    Err(error) => issues.push(error.to_string()),
+                }
+            }
+
+            if !has_credential {
+                continue;
+            }
+            let Ok(relative) = profile_dir.strip_prefix(&profile_root) else {
                 continue;
             };
-            let Ok(relative) = parent.strip_prefix(&profile_root) else {
-                continue;
-            };
-            let profile_path = relative.to_string_lossy().into_owned();
+            let profile_path = relative_profile_path(relative);
             let key = normalized_path_key(&profile_path);
             if profiles.contains_key(&key) {
                 continue;
@@ -1565,6 +1583,10 @@ fn normalized_path_key(path: &str) -> String {
     path.replace('\\', "/").to_lowercase()
 }
 
+fn relative_profile_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn read_text(path: &Path) -> Result<String> {
     let mut file = open_file_no_follow(path)?;
     let mut text = String::new();
@@ -1736,6 +1758,46 @@ mod tests {
         assert_eq!(profile.name, "account-one");
         assert_eq!(profile.family, "client");
         assert_eq!(profile.source, ProfileSource::ProfileDirectory);
+    }
+
+    #[test]
+    fn stops_walking_when_a_profile_directory_is_found() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        let profile_dir = codex.profiles_home.join("profiles/client/account-one");
+        write_file(
+            &profile_dir.join(".profile.json"),
+            r#"{"name":"account-one","family":"client"}"#,
+        );
+        write_file(&profile_dir.join("auth.json"), "codex-secret");
+        write_file(
+            &profile_dir.join("cache/nested/.profile.json"),
+            r#"{"name":"should-not-be-scanned","family":"cache"}"#,
+        );
+        write_file(&profile_dir.join("cache/nested/auth.json"), "cached-secret");
+
+        let inventory = discover_profiles(&config);
+        assert_eq!(inventory.profiles.len(), 1);
+        assert_eq!(inventory.profiles[0].name, "account-one");
+        assert_eq!(inventory.profiles[0].profile_path, "client/account-one");
+    }
+
+    #[test]
+    fn empty_placeholders_do_not_hide_nested_profiles() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        let family_dir = codex.profiles_home.join("profiles/client");
+        write_file(&family_dir.join(".profile.json"), "");
+        write_file(&family_dir.join("auth.json"), "");
+        write_file(&family_dir.join("account-one/auth.json"), "codex-secret");
+
+        let inventory = discover_profiles(&config);
+        assert_eq!(inventory.profiles.len(), 1);
+        assert_eq!(inventory.profiles[0].name, "account-one");
+        assert_eq!(inventory.profiles[0].profile_path, "client/account-one");
+        assert!(inventory.profiles[0].credential_present);
     }
 
     #[test]

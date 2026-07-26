@@ -14,12 +14,32 @@ import {
 } from "./profile-utils";
 import type {
   ActivationResult,
+  AppSnapshot,
   DesktopActivationOutcome,
   DesktopAppStatus,
   Profile,
   ProfileInventory,
   Provider,
 } from "./types";
+
+const PROFILE_SCAN_TIMEOUT_MS = 20_000;
+
+async function scanAppSnapshot(): Promise<AppSnapshot> {
+  let timeoutId = 0;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      reject(
+        `Profile scanning did not finish within ${PROFILE_SCAN_TIMEOUT_MS / 1000} seconds. Confirm the configured profile stores are available, then scan again.`,
+      );
+    }, PROFILE_SCAN_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([invoke<AppSnapshot>("app_snapshot"), timeout]);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
 
 const PROVIDER_FILTERS = [
   { value: ALL_PROVIDERS, label: "All" },
@@ -338,8 +358,9 @@ export default function App() {
         });
         return;
       }
-      setInventory(await invoke<ProfileInventory>("list_profiles"));
-      setDesktop(await invoke<DesktopAppStatus>("desktop_app_status"));
+      const snapshot = await scanAppSnapshot();
+      setInventory(snapshot.inventory);
+      setDesktop(snapshot.desktop);
     } catch (reason) {
       setError(String(reason));
     } finally {

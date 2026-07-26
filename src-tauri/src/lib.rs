@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use opensoft_open_profiler_core::{
     activate_codex_desktop_profile as activate_desktop,
-    codex_desktop_status as inspect_desktop_credentials,
+    codex_desktop_status_from_inventory as inspect_desktop_credentials,
     confirm_codex_desktop_profile as confirm_desktop,
     rollback_codex_desktop_profile as rollback_desktop, CodexDesktopActivationResult,
     CodexDesktopStatus,
@@ -18,12 +18,6 @@ use std::path::PathBuf;
 
 #[cfg(windows)]
 mod windows_desktop;
-
-#[tauri::command]
-fn list_profiles() -> Result<ProfileInventory, String> {
-    let config = DiscoveryConfig::from_env().map_err(|error| error.to_string())?;
-    Ok(discover_profiles(&config))
-}
 
 #[tauri::command]
 fn activate_profile(provider: Provider, profile_path: String) -> Result<ActivationResult, String> {
@@ -54,36 +48,58 @@ struct DesktopActivationOutcome {
     relaunched: bool,
 }
 
-#[tauri::command]
-fn desktop_app_status() -> Result<DesktopAppStatus, String> {
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSnapshot {
+    inventory: ProfileInventory,
+    desktop: DesktopAppStatus,
+}
+
+fn app_snapshot_blocking() -> Result<AppSnapshot, String> {
+    let config = DiscoveryConfig::from_env().map_err(|error| error.to_string())?;
+    let inventory = discover_profiles(&config);
+
     #[cfg(not(windows))]
     {
-        Ok(DesktopAppStatus {
-            platform_supported: false,
-            installed: false,
-            running: false,
-            file_activation_supported: false,
-            credential_store: "unavailable".to_string(),
-            eligible_profile_paths: Vec::new(),
-            active_profile_paths: Vec::new(),
-            rollback_available: false,
-            message: "GPT app switching requires the native Windows openProfiler app".to_string(),
+        Ok(AppSnapshot {
+            inventory,
+            desktop: DesktopAppStatus {
+                platform_supported: false,
+                installed: false,
+                running: false,
+                file_activation_supported: false,
+                credential_store: "unavailable".to_string(),
+                eligible_profile_paths: Vec::new(),
+                active_profile_paths: Vec::new(),
+                rollback_available: false,
+                message: "GPT app switching requires the native Windows openProfiler app"
+                    .to_string(),
+            },
         })
     }
 
     #[cfg(windows)]
     {
-        let config = DiscoveryConfig::from_env().map_err(|error| error.to_string())?;
         let home = desktop_home(&config)?;
-        let credential_status = inspect_desktop_credentials(&config, &home);
+        let credential_status = inspect_desktop_credentials(&config, &home, &inventory);
         let app = windows_desktop::inspect();
         let message = if !app.installed {
             "The Windows ChatGPT desktop app was not detected".to_string()
         } else {
             credential_status.message.clone()
         };
-        Ok(desktop_status_view(credential_status, app, message))
+        Ok(AppSnapshot {
+            inventory,
+            desktop: desktop_status_view(credential_status, app, message),
+        })
     }
+}
+
+#[tauri::command]
+async fn app_snapshot() -> Result<AppSnapshot, String> {
+    tauri::async_runtime::spawn_blocking(app_snapshot_blocking)
+        .await
+        .map_err(|error| format!("profile scan task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -224,9 +240,8 @@ fn desktop_activation_outcome(
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            list_profiles,
+            app_snapshot,
             activate_profile,
-            desktop_app_status,
             activate_codex_desktop_profile,
             rollback_codex_desktop_profile,
             confirm_codex_desktop_profile

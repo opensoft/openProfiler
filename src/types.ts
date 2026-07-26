@@ -45,6 +45,11 @@ export interface DesktopAppStatus {
   message: string;
 }
 
+export interface AppSnapshot {
+  inventory: ProfileInventory;
+  desktop: DesktopAppStatus;
+}
+
 export interface DesktopActivationOutcome {
   profile: string;
   outgoingProfilesUpdated: number;

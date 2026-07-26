@@ -1,0 +1,162 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - ".github/workflows/windows-release.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "assets/**"
+      - "crates/**"
+      - "index.html"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "src/**"
+      - "src-tauri/**"
+      - "tsconfig.json"
+      - "tsconfig.node.json"
+      - "vite.config.ts"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    name: Build Windows installers
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.17.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $appVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $expectedTag = "v$appVersion"
+            if ("${{ github.ref_name }}" -ne $expectedTag) {
+              throw "Release tag ${{ github.ref_name }} must match app version $expectedTag"
+            }
+          }
+
+      - name: Validate application
+        run: |
+          pnpm format:check
+          pnpm test
+          cargo fmt --all --check
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build Windows installers
+        id: tauri
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
+        with:
+          tauriScript: pnpm tauri
+          args: --bundles msi,nsis --ci
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: false
+          retryAttempts: 2
+          releaseAssetNamePattern: openProfiler_[version]_[arch][setup][ext]
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: openProfiler-[version]-[platform]-[arch]-[bundle]
+
+  publish-release:
+    name: Publish GitHub prerelease
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build-windows
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download Windows installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: openProfiler-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assets = @(
+            Get-ChildItem release-assets -Recurse -File |
+              Where-Object {
+                $_.Extension -eq ".msi" -or $_.Name -like "*-setup.exe"
+              }
+          )
+
+          if (-not ($assets | Where-Object { $_.Extension -eq ".msi" })) {
+            throw "The Windows build did not produce an MSI installer"
+          }
+          if (-not ($assets | Where-Object { $_.Name -like "*-setup.exe" })) {
+            throw "The Windows build did not produce an NSIS setup executable"
+          }
+
+          @"
+          Windows installer preview for openProfiler.
+
+          This build is not code-signed yet, so Windows SmartScreen may show a warning.
+          Install the NSIS `-setup.exe` package for the standard per-user installation and Start-menu shortcut.
+          "@ | Set-Content release-notes.md
+
+          $tag = "${{ github.ref_name }}"
+          & gh release view $tag --json tagName *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if ($releaseExists) {
+            $arguments = @("release", "upload", $tag)
+            $arguments += $assets.FullName
+            $arguments += "--clobber"
+            & gh @arguments
+            if ($LASTEXITCODE -eq 0) {
+              & gh release edit $tag `
+                --title "openProfiler $tag" `
+                --notes-file release-notes.md `
+                --prerelease
+            }
+          } else {
+            $arguments = @("release", "create", $tag)
+            $arguments += $assets.FullName
+            $arguments += @(
+              "--title",
+              "openProfiler $tag",
+              "--notes-file",
+              "release-notes.md",
+              "--prerelease",
+              "--verify-tag"
+            )
+            & gh @arguments
+          }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub CLI failed to publish the release"
+          }

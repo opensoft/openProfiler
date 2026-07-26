@@ -9,11 +9,17 @@ on:
       - ".github/workflows/windows-release.yml"
       - "Cargo.lock"
       - "Cargo.toml"
+      - "assets/**"
       - "crates/**"
+      - "index.html"
       - "package.json"
       - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - "src/**"
       - "src-tauri/**"
+      - "tsconfig.json"
+      - "tsconfig.node.json"
+      - "vite.config.ts"
   workflow_dispatch:
 
 concurrency:
@@ -51,7 +57,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $appVersion = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $appVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           "app_version=$appVersion" >> $env:GITHUB_OUTPUT
 
           if ("${{ github.ref_type }}" -eq "tag") {
@@ -65,7 +71,6 @@ jobs:
         run: |
           pnpm format:check
           pnpm test
-          pnpm build
           cargo fmt --all --check
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings

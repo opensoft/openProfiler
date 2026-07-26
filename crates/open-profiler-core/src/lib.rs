@@ -237,6 +237,9 @@ fn discover_wsl_defaults(provider: Provider) -> Option<(PathBuf, PathBuf)> {
                             Provider::Claude => "claude-profiles.json",
                         }),
                     ));
+                    if candidates.len() > 1 {
+                        return None;
+                    }
                     found_in_distribution = true;
                 }
             }

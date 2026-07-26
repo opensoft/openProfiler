@@ -1088,7 +1088,7 @@ fn discover_provider(config: &ProviderConfig) -> (Vec<Profile>, Vec<String>) {
             let metadata_path = profile_dir.join(".profile.json");
             let credential_path = profile_dir.join(config.provider.credential_name());
             let has_metadata = is_regular_file(&metadata_path);
-            let has_credential = is_regular_file(&credential_path);
+            let has_credential = ensure_regular_nonempty_file(&credential_path).is_some();
             if !has_metadata && !has_credential {
                 continue;
             }
@@ -1787,6 +1787,22 @@ mod tests {
         assert_eq!(inventory.profiles.len(), 1);
         assert_eq!(inventory.profiles[0].name, "account-one");
         assert_eq!(inventory.profiles[0].profile_path, "client/account-one");
+    }
+
+    #[test]
+    fn empty_credential_placeholder_does_not_hide_nested_profiles() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        let family_dir = codex.profiles_home.join("profiles/client");
+        write_file(&family_dir.join("auth.json"), "");
+        write_file(&family_dir.join("account-one/auth.json"), "codex-secret");
+
+        let inventory = discover_profiles(&config);
+        assert_eq!(inventory.profiles.len(), 1);
+        assert_eq!(inventory.profiles[0].name, "account-one");
+        assert_eq!(inventory.profiles[0].profile_path, "client/account-one");
+        assert!(inventory.profiles[0].credential_present);
     }
 
     #[test]

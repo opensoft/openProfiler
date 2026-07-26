@@ -1103,7 +1103,7 @@ fn discover_provider(config: &ProviderConfig) -> (Vec<Profile>, Vec<String>) {
                         let relative = profile_dir
                             .strip_prefix(&profile_root)
                             .map_err(|_| ProfileError::EscapedProfileRoot(profile_dir.clone()))?;
-                        profile.profile_path = Some(relative.to_string_lossy().into_owned());
+                        profile.profile_path = Some(relative_profile_path(relative));
                     }
                     resolve_profile(
                         profile,
@@ -1129,7 +1129,7 @@ fn discover_provider(config: &ProviderConfig) -> (Vec<Profile>, Vec<String>) {
             let Ok(relative) = profile_dir.strip_prefix(&profile_root) else {
                 continue;
             };
-            let profile_path = relative.to_string_lossy().into_owned();
+            let profile_path = relative_profile_path(relative);
             let key = normalized_path_key(&profile_path);
             if profiles.contains_key(&key) {
                 continue;
@@ -1587,6 +1587,10 @@ fn replace_file(source: &Path, target: &Path) -> Result<()> {
 
 fn normalized_path_key(path: &str) -> String {
     path.replace('\\', "/").to_lowercase()
+}
+
+fn relative_profile_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn read_text(path: &Path) -> Result<String> {

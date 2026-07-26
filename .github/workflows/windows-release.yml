@@ -105,6 +105,7 @@ jobs:
       - name: Publish GitHub prerelease
         shell: pwsh
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $assets = @(

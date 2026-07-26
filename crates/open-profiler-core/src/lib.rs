@@ -287,18 +287,59 @@ fn parse_wsl_distribution_names(bytes: &[u8]) -> Vec<String> {
 
 #[cfg(windows)]
 fn decode_wsl_output(bytes: &[u8]) -> String {
-    let looks_utf16_le =
-        bytes.starts_with(&[0xff, 0xfe]) || bytes.chunks_exact(2).any(|pair| pair[1] == 0);
-    if !looks_utf16_le {
+    let has_utf16_bom = bytes.starts_with(&[0xff, 0xfe]);
+    let has_utf16_line_ending = bytes
+        .windows(4)
+        .any(|window| window == [b'\r', 0, b'\n', 0])
+        || bytes.windows(2).any(|window| window == [b'\n', 0]);
+    let has_utf8_line_ending = bytes.contains(&b'\n') && !has_utf16_line_ending;
+
+    if has_utf16_bom || has_utf16_line_ending {
+        return decode_utf16_le(bytes, has_utf16_bom);
+    }
+    if has_utf8_line_ending {
         return String::from_utf8_lossy(bytes).into_owned();
     }
 
-    let start = usize::from(bytes.starts_with(&[0xff, 0xfe])) * 2;
+    let utf8 = std::str::from_utf8(bytes).ok();
+    let utf16 = (bytes.len() % 2 == 0).then(|| decode_utf16_le(bytes, false));
+    match (utf8, utf16) {
+        (Some(utf8), Some(utf16)) => {
+            let utf8_penalty = decoding_penalty(utf8);
+            let utf16_penalty = decoding_penalty(&utf16);
+            if utf8_penalty < utf16_penalty {
+                utf8.to_owned()
+            } else {
+                // Native wsl.exe emits UTF-16LE. Prefer it when both strict
+                // decodings are equally plausible and no line ending exists.
+                utf16
+            }
+        }
+        (Some(utf8), None) => utf8.to_owned(),
+        (None, Some(utf16)) => utf16,
+        (None, None) => String::from_utf8_lossy(bytes).into_owned(),
+    }
+}
+
+#[cfg(windows)]
+fn decode_utf16_le(bytes: &[u8], has_bom: bool) -> String {
+    let start = usize::from(has_bom) * 2;
     let units = bytes[start..]
         .chunks_exact(2)
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect::<Vec<_>>();
     String::from_utf16_lossy(&units)
+}
+
+#[cfg(windows)]
+fn decoding_penalty(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|character| {
+            *character == '\u{fffd}'
+                || (*character != '\r' && *character != '\n' && character.is_control())
+        })
+        .count()
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -1614,6 +1655,17 @@ mod tests {
             parse_wsl_distribution_names(b"Ubuntu\r\nUbuntu-Preview\r\n"),
             vec!["Ubuntu", "Ubuntu-Preview"]
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn decodes_utf16_wsl_name_without_null_bytes() {
+        let bytes = "䅂"
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect::<Vec<_>>();
+
+        assert_eq!(decode_wsl_output(&bytes), "䅂");
     }
 
     #[test]

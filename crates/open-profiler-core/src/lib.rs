@@ -147,12 +147,9 @@ impl DiscoveryConfig {
         let claude_manifest_override = env::var_os("CLAUDE_PROFILES_MANIFEST").map(PathBuf::from);
         #[cfg(windows)]
         let (discovered_codex_profiles_home, discovered_codex_manifest) =
-            if codex_profiles_home_override.is_some() {
-                (
-                    default_codex_profiles_home.clone(),
-                    default_codex_manifest.clone(),
-                )
-            } else if default_codex_profiles_home.join("profiles").is_dir() {
+            if codex_profiles_home_override.is_some()
+                || default_codex_profiles_home.join("profiles").is_dir()
+            {
                 (
                     default_codex_profiles_home.clone(),
                     default_codex_manifest.clone(),
@@ -172,12 +169,9 @@ impl DiscoveryConfig {
         );
         #[cfg(windows)]
         let (discovered_claude_profiles_home, discovered_claude_manifest) =
-            if claude_profiles_home_override.is_some() {
-                (
-                    default_claude_profiles_home.clone(),
-                    default_claude_manifest.clone(),
-                )
-            } else if default_claude_profiles_home.join("profiles").is_dir() {
+            if claude_profiles_home_override.is_some()
+                || default_claude_profiles_home.join("profiles").is_dir()
+            {
                 (
                     default_claude_profiles_home.clone(),
                     default_claude_manifest.clone(),

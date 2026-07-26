@@ -135,6 +135,29 @@ pnpm tauri dev
 The repository includes a Tauri shell, React frontend, isolated Rust core,
 cross-platform icons, CI, Dependabot, security policy, and contribution guide.
 
+## Windows installer
+
+Version tags publish Windows installers through the
+[`Windows Release`](.github/workflows/windows-release.yml) GitHub Actions
+workflow. The tag must match the version in `src-tauri/tauri.conf.json`; for
+example, version `0.1.0` is released with tag `v0.1.0`.
+
+The release contains:
+
+- an NSIS `-setup.exe` installer for the standard per-user installation;
+- an MSI installer;
+- retained GitHub Actions artifacts for the exact workflow run.
+
+The NSIS installer creates an **openProfiler** Start-menu shortcut. These
+preview installers are not code-signed yet, so Windows SmartScreen may display
+a warning. Code-signing material must be supplied through GitHub Secrets and
+must never be committed.
+
+Pull requests that change release inputs build the same installers so packaging
+failures are caught before merge. The workflow can also be started manually
+from **Actions → Windows Release**. Pull-request and manual runs retain the
+installers as workflow artifacts but do not create a GitHub Release.
+
 ## Compatible metadata
 
 openProfiler recognizes workBenches version 1 manifests:

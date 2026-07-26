@@ -1,0 +1,147 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - ".github/workflows/windows-release.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "src/**"
+      - "src-tauri/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows:
+    name: Build Windows installers
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate release version
+        id: version
+        shell: pwsh
+        run: |
+          $appVersion = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          "app_version=$appVersion" >> $env:GITHUB_OUTPUT
+
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $expectedTag = "v$appVersion"
+            if ("${{ github.ref_name }}" -ne $expectedTag) {
+              throw "Release tag ${{ github.ref_name }} must match app version $expectedTag"
+            }
+          }
+
+      - name: Validate application
+        run: |
+          pnpm format:check
+          pnpm test
+          pnpm build
+          cargo fmt --all --check
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build Windows installers
+        id: tauri
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
+        with:
+          tauriScript: pnpm tauri
+          args: --bundles msi,nsis --ci
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: false
+          retryAttempts: 2
+          releaseAssetNamePattern: openProfiler_[version]_[arch][setup][ext]
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: openProfiler-[version]-[platform]-[arch]-[bundle]
+
+  publish-release:
+    name: Publish GitHub prerelease
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build-windows
+    runs-on: windows-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download Windows installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: openProfiler-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $assets = @(
+            Get-ChildItem release-assets -Recurse -File |
+              Where-Object {
+                $_.Extension -eq ".msi" -or $_.Name -like "*-setup.exe"
+              }
+          )
+
+          if (-not ($assets | Where-Object { $_.Extension -eq ".msi" })) {
+            throw "The Windows build did not produce an MSI installer"
+          }
+          if (-not ($assets | Where-Object { $_.Name -like "*-setup.exe" })) {
+            throw "The Windows build did not produce an NSIS setup executable"
+          }
+
+          @"
+          Windows installer preview for openProfiler.
+
+          This build is not code-signed yet, so Windows SmartScreen may show a warning.
+          Install the NSIS `-setup.exe` package for the standard per-user installation and Start-menu shortcut.
+          "@ | Set-Content release-notes.md
+
+          $arguments = @(
+            "release",
+            "create",
+            "${{ github.ref_name }}"
+          )
+          $arguments += $assets.FullName
+          $arguments += @(
+            "--title",
+            "openProfiler ${{ github.ref_name }}",
+            "--notes-file",
+            "release-notes.md",
+            "--prerelease",
+            "--verify-tag"
+          )
+
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub CLI failed to publish the release"
+          }

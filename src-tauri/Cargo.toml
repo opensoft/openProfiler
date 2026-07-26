@@ -1,6 +1,6 @@
 [package]
 name = "opensoft-open-profiler"
-version = "0.1.1"
+version = "0.1.2"
 description = "A full LLM profile manager"
 edition.workspace = true
 license.workspace = true

@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { version as packageVersion } from "../package.json";
 import { devFixtureDesktopStatus, devFixtureInventory } from "./dev-fixture";
 import {
   activationPayload,
@@ -329,6 +331,7 @@ function ProfileResults({
 }
 
 export default function App() {
+  const [appVersion, setAppVersion] = useState(packageVersion);
   const [inventory, setInventory] = useState<ProfileInventory | null>(null);
   const [desktop, setDesktop] = useState<DesktopAppStatus | null>(null);
   const [provider, setProvider] = useState<Provider | typeof ALL_PROVIDERS>(
@@ -371,6 +374,22 @@ export default function App() {
   useEffect(() => {
     void loadProfiles();
   }, [loadProfiles]);
+
+  useEffect(() => {
+    let active = true;
+    void getVersion()
+      .then((version) => {
+        if (active) {
+          setAppVersion(version);
+        }
+      })
+      .catch(() => {
+        // The package version remains a reliable fallback in browser previews.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -479,7 +498,15 @@ export default function App() {
         </div>
         <div className="hero__copy">
           <p className="eyebrow">Local profiles · Codex + Claude</p>
-          <h1>openProfiler</h1>
+          <div className="hero__title">
+            <h1>openProfiler</h1>
+            <span
+              aria-label={`openProfiler version ${appVersion}`}
+              className="version-badge"
+            >
+              v{appVersion}
+            </span>
+          </div>
           <p>
             Manage local LLM profiles and choose the identity each provider uses
             next.

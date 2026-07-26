@@ -93,12 +93,30 @@ code {
   transform: translateY(-5px);
 }
 
-.hero__copy h1 {
+.hero__title {
+  display: flex;
+  gap: 10px;
+  align-items: center;
   margin: 3px 0 5px;
+}
+
+.hero__copy h1 {
+  margin: 0;
   color: #f7fbff;
   font-size: clamp(1.8rem, 3vw, 2.55rem);
   letter-spacing: -0.045em;
   line-height: 1;
+}
+
+.version-badge {
+  padding: 4px 7px;
+  border: 1px solid rgb(89 184 255 / 24%);
+  border-radius: 999px;
+  color: #80bfe8;
+  background: rgb(18 49 70 / 72%);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
 }
 
 .hero__copy > p:last-child {

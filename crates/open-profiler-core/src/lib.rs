@@ -302,7 +302,10 @@ fn decode_wsl_output(bytes: &[u8]) -> String {
     }
 
     let utf8 = std::str::from_utf8(bytes).ok();
-    let utf16 = (bytes.len() % 2 == 0).then(|| decode_utf16_le(bytes, false));
+    let utf16 = bytes
+        .len()
+        .is_multiple_of(2)
+        .then(|| decode_utf16_le(bytes, false));
     match (utf8, utf16) {
         (Some(utf8), Some(utf16)) => {
             let utf8_penalty = decoding_penalty(utf8);

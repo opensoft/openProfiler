@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import packageMetadata from "../package.json";
+import { version as packageVersion } from "../package.json";
 import { devFixtureDesktopStatus, devFixtureInventory } from "./dev-fixture";
 import {
   activationPayload,
@@ -331,7 +331,7 @@ function ProfileResults({
 }
 
 export default function App() {
-  const [appVersion, setAppVersion] = useState(packageMetadata.version);
+  const [appVersion, setAppVersion] = useState(packageVersion);
   const [inventory, setInventory] = useState<ProfileInventory | null>(null);
   const [desktop, setDesktop] = useState<DesktopAppStatus | null>(null);
   const [provider, setProvider] = useState<Provider | typeof ALL_PROVIDERS>(

@@ -1087,7 +1087,7 @@ fn discover_provider(config: &ProviderConfig) -> (Vec<Profile>, Vec<String>) {
             let profile_dir = entry.into_path();
             let metadata_path = profile_dir.join(".profile.json");
             let credential_path = profile_dir.join(config.provider.credential_name());
-            let has_metadata = is_regular_file(&metadata_path);
+            let has_metadata = ensure_regular_nonempty_file(&metadata_path).is_some();
             let has_credential = ensure_regular_nonempty_file(&credential_path).is_some();
             if !has_metadata && !has_credential {
                 continue;
@@ -1344,12 +1344,6 @@ fn ensure_regular_nonempty_file(path: &Path) -> Option<()> {
         .ok()
         .filter(|metadata| metadata.file_type().is_file() && metadata.len() > 0)
         .map(|_| ())
-}
-
-fn is_regular_file(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_file())
-        .unwrap_or(false)
 }
 
 fn credential_stamp(path: &Path) -> Option<(u64, u64, u32)> {
@@ -1790,11 +1784,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_credential_placeholder_does_not_hide_nested_profiles() {
+    fn empty_placeholders_do_not_hide_nested_profiles() {
         let temp = TempDir::new().unwrap();
         let config = config(&temp);
         let codex = provider_config(&config, Provider::Codex);
         let family_dir = codex.profiles_home.join("profiles/client");
+        write_file(&family_dir.join(".profile.json"), "");
         write_file(&family_dir.join("auth.json"), "");
         write_file(&family_dir.join("account-one/auth.json"), "codex-secret");
 

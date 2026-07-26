@@ -29,7 +29,7 @@ async function scanAppSnapshot(): Promise<AppSnapshot> {
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = window.setTimeout(() => {
       reject(
-        "Profile scanning did not finish within 20 seconds. Confirm the configured profile stores are available, then scan again.",
+        `Profile scanning did not finish within ${PROFILE_SCAN_TIMEOUT_MS / 1000} seconds. Confirm the configured profile stores are available, then scan again.`,
       );
     }, PROFILE_SCAN_TIMEOUT_MS);
   });

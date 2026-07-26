@@ -142,7 +142,7 @@ Version tags publish Windows installers through the
 workflow. The tag must match the version in `src-tauri/tauri.conf.json`; for
 example, version `0.1.0` is released with tag `v0.1.0`.
 
-The tagged GitHub Release contains:
+The tagged GitHub prerelease contains:
 
 - an NSIS `-setup.exe` installer for the standard per-user installation;
 - an MSI installer.

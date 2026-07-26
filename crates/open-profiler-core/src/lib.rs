@@ -137,9 +137,22 @@ impl DiscoveryConfig {
         let default_codex_manifest = config_home.join("workbenches/openai-profiles.json");
         let default_claude_profiles_home = Provider::Claude.default_profiles_home(&home);
         let default_claude_manifest = config_home.join("workbenches/claude-profiles.json");
+        let codex_profiles_home_override = env::var_os("CODEX_PROFILES_HOME")
+            .or_else(|| env::var_os("CHATGPT_PROFILES_HOME"))
+            .map(PathBuf::from);
+        let codex_manifest_override = env::var_os("CODEX_PROFILES_MANIFEST")
+            .or_else(|| env::var_os("CHATGPT_PROFILES_MANIFEST"))
+            .map(PathBuf::from);
+        let claude_profiles_home_override = env::var_os("CLAUDE_PROFILES_HOME").map(PathBuf::from);
+        let claude_manifest_override = env::var_os("CLAUDE_PROFILES_MANIFEST").map(PathBuf::from);
         #[cfg(windows)]
         let (discovered_codex_profiles_home, discovered_codex_manifest) =
-            if default_codex_profiles_home.join("profiles").is_dir() {
+            if codex_profiles_home_override.is_some() {
+                (
+                    default_codex_profiles_home.clone(),
+                    default_codex_manifest.clone(),
+                )
+            } else if default_codex_profiles_home.join("profiles").is_dir() {
                 (
                     default_codex_profiles_home.clone(),
                     default_codex_manifest.clone(),
@@ -159,7 +172,12 @@ impl DiscoveryConfig {
         );
         #[cfg(windows)]
         let (discovered_claude_profiles_home, discovered_claude_manifest) =
-            if default_claude_profiles_home.join("profiles").is_dir() {
+            if claude_profiles_home_override.is_some() {
+                (
+                    default_claude_profiles_home.clone(),
+                    default_claude_manifest.clone(),
+                )
+            } else if default_claude_profiles_home.join("profiles").is_dir() {
                 (
                     default_claude_profiles_home.clone(),
                     default_claude_manifest.clone(),
@@ -180,14 +198,8 @@ impl DiscoveryConfig {
 
         let codex = ProviderConfig {
             provider: Provider::Codex,
-            manifest_path: env::var_os("CODEX_PROFILES_MANIFEST")
-                .or_else(|| env::var_os("CHATGPT_PROFILES_MANIFEST"))
-                .map(PathBuf::from)
-                .unwrap_or(discovered_codex_manifest),
-            profiles_home: env::var_os("CODEX_PROFILES_HOME")
-                .or_else(|| env::var_os("CHATGPT_PROFILES_HOME"))
-                .map(PathBuf::from)
-                .unwrap_or(discovered_codex_profiles_home),
+            manifest_path: codex_manifest_override.unwrap_or(discovered_codex_manifest),
+            profiles_home: codex_profiles_home_override.unwrap_or(discovered_codex_profiles_home),
             active_home: env::var_os("OPENPROFILER_CODEX_ACTIVE_HOME")
                 .or_else(|| env::var_os("PROFILE_SWITCHER_CODEX_ACTIVE_HOME"))
                 .map(PathBuf::from)
@@ -196,12 +208,8 @@ impl DiscoveryConfig {
 
         let claude = ProviderConfig {
             provider: Provider::Claude,
-            manifest_path: env::var_os("CLAUDE_PROFILES_MANIFEST")
-                .map(PathBuf::from)
-                .unwrap_or(discovered_claude_manifest),
-            profiles_home: env::var_os("CLAUDE_PROFILES_HOME")
-                .map(PathBuf::from)
-                .unwrap_or(discovered_claude_profiles_home),
+            manifest_path: claude_manifest_override.unwrap_or(discovered_claude_manifest),
+            profiles_home: claude_profiles_home_override.unwrap_or(discovered_claude_profiles_home),
             active_home: env::var_os("OPENPROFILER_CLAUDE_ACTIVE_HOME")
                 .or_else(|| env::var_os("PROFILE_SWITCHER_CLAUDE_ACTIVE_HOME"))
                 .map(PathBuf::from)
@@ -254,7 +262,11 @@ fn wsl_distribution_names() -> Vec<String> {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let mut command = std::process::Command::new("wsl.exe");
+    let Some(system_root) = env::var_os("SystemRoot") else {
+        return Vec::new();
+    };
+    let wsl_executable = PathBuf::from(system_root).join("System32").join("wsl.exe");
+    let mut command = std::process::Command::new(wsl_executable);
     command
         .args(["--list", "--quiet"])
         .creation_flags(CREATE_NO_WINDOW);

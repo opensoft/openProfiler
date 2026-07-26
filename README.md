@@ -59,9 +59,9 @@ supported credential-store modes.
 
 On Windows, when the provider's profile store is absent from `%USERPROFILE%`,
 openProfiler enumerates registered WSL distributions and discovers exactly one
-Codex or Claude store through its distro-specific `\\wsl.localhost` path. Set
-the profile-store environment variables below when more than one WSL store
-exists.
+Codex or Claude store through distro-specific `\\wsl.localhost` or `\\wsl$`
+paths. Set the profile-store environment variables below when more than one WSL
+store exists.
 
 ## Discovery
 

@@ -31,6 +31,14 @@ profiles.local.json
 # Contains mutation testing data
 **/mutants.out*/
 
+# setup-openspeckit creates machine-local links to user-global skills. The
+# repository carries the workflow pointers and command templates, not absolute
+# links into one developer's home directory.
+.agents/skills/
+.claude/skills/
+.codex/skills/
+.specify/workflows/.cache/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore

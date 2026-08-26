@@ -180,7 +180,9 @@ openprofiler-broker intake
 `\r\n` is trimmed; nothing else is. It must be valid UTF-8. Standard input is
 read exactly once and never echoed, and it is not read at all when the
 invocation is refused before it — an `--auth-kind oauth` intake never touches
-it.
+it, and a malformed invocation is refused before it too. A caller writing to a
+child that has already refused will see a broken pipe; that is the refusal
+arriving, not a failure of the call. See the consumer obligations below.
 
 | Refusal                           | Exit | `code`                    |
 | --------------------------------- | ---- | ------------------------- |
@@ -603,6 +605,13 @@ Contract for the consumer, restated as obligations:
 
 - Write the secret to the child's stdin, then **close stdin**. `intake` reads to
   EOF and will otherwise wait.
+- **Tolerate a broken pipe on that write.** Some invocations are refused before
+  standard input is read at all — `--auth-kind oauth` is refused that way on
+  purpose, so a grant never enters a process that cannot store it correctly —
+  and the broker may then have exited before the write completes. A write error
+  is not the answer; the exit code and the error object on stderr are. Treat
+  `EPIPE` / `ERROR_BROKEN_PIPE` as "read the refusal", not as a failure of the
+  invocation.
 - Never place a secret in `argv`, an environment variable, or a file. Env vars
   are inherited by every descendant; argv is world-readable.
 - Parse stdout as one JSON object. Treat a non-zero exit, unparseable stdout, or

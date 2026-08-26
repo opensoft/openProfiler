@@ -125,14 +125,22 @@ fn execute(args: &[String], input: &mut dyn Read, output: &mut dyn Write) -> Res
     };
     let rest = &args[1..];
 
-    if matches!(command.as_str(), "help" | "--help" | "-h") {
+    // `--help` and `--version` are answered on the program AND on any
+    // subcommand, and before that subcommand's flags are read, because
+    // docs/broker-cli.md declares them accepted in both positions. Leaving
+    // them to the flag parser would make `mint --version` an unknown-flag
+    // usage error — a consumer asking which broker it is talking to would get
+    // exit 2 and a refusal instead of the version. Help wins when both are
+    // given, because a caller asking for both is asking to be oriented.
+    if matches!(command.as_str(), "help" | "--help" | "-h")
+        || rest.iter().any(|arg| arg == "--help" || arg == "-h")
+    {
         return write_line(output, USAGE);
     }
-    if matches!(command.as_str(), "version" | "--version" | "-V") {
+    if matches!(command.as_str(), "version" | "--version" | "-V")
+        || rest.iter().any(|arg| arg == "--version" || arg == "-V")
+    {
         return write_line(output, env!("CARGO_PKG_VERSION"));
-    }
-    if rest.iter().any(|arg| arg == "--help" || arg == "-h") {
-        return write_line(output, USAGE);
     }
 
     match command.as_str() {
@@ -631,6 +639,67 @@ mod tests {
             String::from_utf8(output).unwrap().trim(),
             env!("CARGO_PKG_VERSION")
         );
+    }
+
+    #[test]
+    fn every_subcommand_answers_help_and_version_without_touching_the_store() {
+        // Declared in docs/broker-cli.md: both are accepted on the program and
+        // on any subcommand. A subcommand that made `--version` an unknown flag
+        // would be a contract break, not a cosmetic gap.
+        for command in ["intake", "mint", "revoke", "list", "authorize"] {
+            for spelling in ["--version", "-V"] {
+                let mut output = Vec::new();
+                let mut errors = Vec::new();
+                let code = run(
+                    &args(&[command, spelling]),
+                    &mut &[][..],
+                    &mut output,
+                    &mut errors,
+                );
+                assert_eq!(code, 0, "{command} {spelling}");
+                assert_eq!(
+                    String::from_utf8(output).unwrap().trim(),
+                    env!("CARGO_PKG_VERSION"),
+                    "{command} {spelling}"
+                );
+                assert!(errors.is_empty(), "{command} {spelling}");
+            }
+
+            for spelling in ["--help", "-h"] {
+                let mut output = Vec::new();
+                let mut errors = Vec::new();
+                let code = run(
+                    &args(&[command, spelling]),
+                    &mut &[][..],
+                    &mut output,
+                    &mut errors,
+                );
+                assert_eq!(code, 0, "{command} {spelling}");
+                assert!(
+                    String::from_utf8(output).unwrap().contains(command),
+                    "{command} {spelling}"
+                );
+                assert!(errors.is_empty(), "{command} {spelling}");
+            }
+        }
+
+        // The version is answered before the subcommand's own flags are read,
+        // so it works on an invocation that is otherwise incomplete — which is
+        // the case a consumer probing an installed broker actually has.
+        let mut output = Vec::new();
+        let mut errors = Vec::new();
+        let code = run(
+            &args(&["mint", "--version", "--reference", "not-a-reference"]),
+            &mut &[][..],
+            &mut output,
+            &mut errors,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(
+            String::from_utf8(output).unwrap().trim(),
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(errors.is_empty());
     }
 
     #[test]

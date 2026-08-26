@@ -246,6 +246,10 @@ impl CustodyStore {
 
     /// Appends one audit line. The store has no rewrite path for this file:
     /// append-only is a property of the code, not only of a convention.
+    ///
+    /// The record is rendered into one buffer, newline included, and handed to
+    /// exactly one `write` call. That is what keeps the one-JSON-object-per-line
+    /// contract true when several brokers append to one store at once.
     pub fn append_audit(&self, record: &AuditRecord) -> Result<()> {
         self.ensure_layout()?;
         let path = self.audit_path();
@@ -270,12 +274,43 @@ impl CustodyStore {
                 path: path.clone(),
                 message: error.to_string(),
             })?;
-        file.write_all(&line)
-            .and_then(|()| file.sync_all())
+        // Exactly one `write` syscall, deliberately not `write_all`.
+        //
+        // The file is open in append mode, so each write seeks to the end and
+        // writes there as one indivisible step relative to other writers —
+        // that is the guarantee `O_APPEND` gives on a regular file (and
+        // `FILE_APPEND_DATA` on Windows), and it is a guarantee about a single
+        // call. POSIX's atomicity-up-to-`PIPE_BUF` rule is about pipes, not
+        // regular files, and is not what is relied on here. `write_all` would
+        // loop on a short write, and the remainder of this record would then
+        // land after whatever another broker appended in between — splicing
+        // one line into the middle of another and breaking the
+        // one-JSON-object-per-line contract silently.
+        //
+        // So a short write is reported rather than resumed. A truncated audit
+        // record must be visible: a caller that believes its issuance was
+        // recorded when it was recorded only in part is worse off than one
+        // told the write failed.
+        let written = file
+            .write(&line)
             .map_err(|error| BrokerError::CustodyWrite {
-                path,
+                path: path.clone(),
                 message: error.to_string(),
-            })
+            })?;
+        if written != line.len() {
+            return Err(BrokerError::CustodyWrite {
+                path,
+                message: format!(
+                    "the audit record was written short: {written} of {} bytes, \
+                     so the log may hold a truncated line",
+                    line.len()
+                ),
+            });
+        }
+        file.sync_all().map_err(|error| BrokerError::CustodyWrite {
+            path,
+            message: error.to_string(),
+        })
     }
 
     pub fn read_audit(&self) -> Result<Vec<AuditRecord>> {

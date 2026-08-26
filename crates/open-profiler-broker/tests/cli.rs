@@ -9,20 +9,49 @@ use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
 const BROKER: &str = env!("CARGO_BIN_EXE_openprofiler-broker");
-const SECRET: &str = "sk-live-canary-9d41f0c8-must-not-appear";
+
+/// A credential value that exists only for the duration of one test.
+///
+/// Assembled at runtime rather than written as a literal, and unique per run.
+/// A literal would make the tracked-tree assertion below vacuous — it would
+/// always match this file — and a real secret is exactly this: a value that
+/// lives in no source file. So the canary behaves like one.
+fn canary() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("a clock after the epoch")
+        .as_nanos();
+    format!(
+        "sk-{}-{}-{}-{}-{}",
+        "canary",
+        std::process::id(),
+        nanos,
+        COUNTER.fetch_add(1, Ordering::Relaxed),
+        "must-not-appear"
+    )
+}
 
 struct Broker {
     home: TempDir,
+    secret: String,
 }
 
 impl Broker {
     fn new() -> Self {
         Self {
             home: TempDir::new().expect("a temporary broker home"),
+            secret: canary(),
         }
+    }
+
+    fn secret(&self) -> &str {
+        &self.secret
     }
 
     fn root(&self) -> PathBuf {
@@ -131,7 +160,7 @@ fn files_containing(root: &Path, needle: &str) -> Vec<PathBuf> {
 fn the_full_api_key_lifecycle_runs_end_to_end() {
     let broker = Broker::new();
 
-    let receipt = broker.intake(SECRET);
+    let receipt = broker.intake(broker.secret());
     assert_eq!(receipt["kind"], "openprofiler_broker_intake");
     assert_eq!(receipt["schema_version"], 1);
     assert_eq!(receipt["binding"], "anthropic-default");
@@ -178,7 +207,7 @@ fn the_full_api_key_lifecycle_runs_end_to_end() {
     assert_eq!(minted["enforcement"]["expiry"], "broker_bookkeeping");
     assert_eq!(minted["enforcement"]["scope"], "declared");
     // The minted token is provider-native: the stored key itself.
-    assert_eq!(minted["token"], SECRET);
+    assert_eq!(minted["token"], broker.secret());
     let issued_at = minted["issued_at"].as_str().unwrap();
     let expires_at = minted["expires_at"].as_str().unwrap();
     assert!(issued_at.ends_with('Z') && expires_at.ends_with('Z'));
@@ -206,7 +235,7 @@ fn the_full_api_key_lifecycle_runs_end_to_end() {
 #[test]
 fn the_secret_appears_nowhere_outside_the_one_custody_file() {
     let broker = Broker::new();
-    let receipt = broker.intake(SECRET);
+    let receipt = broker.intake(broker.secret());
     let reference = receipt["reference"].as_str().unwrap().to_string();
 
     // Nothing the broker said at intake carries it.
@@ -222,13 +251,13 @@ fn the_secret_appears_nowhere_outside_the_one_custody_file() {
             "--approved-by",
             "brett@opensoft.one",
         ],
-        SECRET.as_bytes(),
+        broker.secret().as_bytes(),
     );
-    assert!(!String::from_utf8_lossy(&intake_output.stdout).contains(SECRET));
-    assert!(!String::from_utf8_lossy(&intake_output.stderr).contains(SECRET));
+    assert!(!String::from_utf8_lossy(&intake_output.stdout).contains(broker.secret()));
+    assert!(!String::from_utf8_lossy(&intake_output.stderr).contains(broker.secret()));
 
     // Exactly one file in the whole store holds it, per reference taken.
-    let holders = files_containing(broker.home.path(), SECRET);
+    let holders = files_containing(broker.home.path(), broker.secret());
     assert_eq!(holders.len(), 2, "found {holders:?}");
     for holder in &holders {
         assert_eq!(
@@ -240,35 +269,40 @@ fn the_secret_appears_nowhere_outside_the_one_custody_file() {
 
     // Neither the index nor the audit log carries it.
     let index = std::fs::read_to_string(broker.root().join("references.json")).unwrap();
-    assert!(!index.contains(SECRET));
+    assert!(!index.contains(broker.secret()));
     let audit =
         std::fs::read_to_string(broker.root().join("audit").join("broker-audit.jsonl")).unwrap();
-    assert!(!audit.contains(SECRET));
+    assert!(!audit.contains(broker.secret()));
 
     // `list` never discloses it.
     let listing = broker.run(&["list"]);
-    assert!(!String::from_utf8_lossy(&listing.stdout).contains(SECRET));
+    assert!(!String::from_utf8_lossy(&listing.stdout).contains(broker.secret()));
 
     // After revocation nothing in the store holds it any more.
     broker.run(&["revoke", "--reference", &reference]);
     let second = receipt_reference(&broker, "second");
     broker.run(&["revoke", "--reference", &second]);
-    assert!(files_containing(broker.home.path(), SECRET).is_empty());
+    assert!(files_containing(broker.home.path(), broker.secret()).is_empty());
 
-    // And it was never in this repository.
+    // And it never reached this repository at all — neither the committed
+    // content nor the working tree, tracked or not.
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("the workspace root");
-    let tracked = Command::new("git")
-        .args(["grep", "--cached", "-l", SECRET])
-        .current_dir(repository)
-        .output();
-    if let Ok(tracked) = tracked {
+    for scope in [["grep", "--cached", "-l"], ["grep", "--untracked", "-l"]] {
+        let Ok(found) = Command::new("git")
+            .args(scope)
+            .arg(broker.secret())
+            .current_dir(repository)
+            .output()
+        else {
+            continue;
+        };
         assert!(
-            tracked.stdout.is_empty(),
-            "the canary is committed in {}",
-            String::from_utf8_lossy(&tracked.stdout)
+            found.stdout.is_empty(),
+            "the canary reached the repository via {scope:?}: {}",
+            String::from_utf8_lossy(&found.stdout)
         );
     }
 }
@@ -289,7 +323,7 @@ fn receipt_reference(broker: &Broker, binding: &str) -> String {
 #[test]
 fn the_audit_log_records_one_line_per_event_with_the_accountability_fields() {
     let broker = Broker::new();
-    let receipt = broker.intake(SECRET);
+    let receipt = broker.intake(broker.secret());
     let reference = receipt["reference"].as_str().unwrap().to_string();
 
     let first = succeeded(&broker.run(&["mint", "--reference", &reference]));
@@ -355,12 +389,12 @@ fn a_secret_is_never_accepted_on_argv() {
             "--approved-by",
             "brett@opensoft.one",
             spelling,
-            SECRET,
+            broker.secret(),
         ]);
         let body = refused(&output, 2, "secret_in_argv");
-        assert!(!body["message"].as_str().unwrap().contains(SECRET));
+        assert!(!body["message"].as_str().unwrap().contains(broker.secret()));
     }
-    assert!(files_containing(broker.home.path(), SECRET).is_empty());
+    assert!(files_containing(broker.home.path(), broker.secret()).is_empty());
 }
 
 #[test]
@@ -400,7 +434,7 @@ fn a_missing_approver_refuses_because_a_grant_without_one_is_invalid() {
             "--auth-kind",
             "api_key",
         ],
-        SECRET.as_bytes(),
+        broker.secret().as_bytes(),
     );
     let body = refused(&output, 2, "usage");
     assert!(body["message"]
@@ -455,7 +489,7 @@ fn the_oauth_paths_refuse_honestly_with_the_declared_exit_code() {
 #[test]
 fn a_reference_cannot_reach_outside_the_custody_root() {
     let broker = Broker::new();
-    broker.intake(SECRET);
+    broker.intake(broker.secret());
     for candidate in [
         "../../../etc/passwd",
         "opref-../../etc/passwd",
@@ -471,7 +505,7 @@ fn a_reference_cannot_reach_outside_the_custody_root() {
 #[test]
 fn an_unheld_reference_is_distinguishable_from_a_broken_store() {
     let broker = Broker::new();
-    broker.intake(SECRET);
+    broker.intake(broker.secret());
     let absent = "opref-000000000000000000000000";
     refused(
         &broker.run(&["mint", "--reference", absent]),
@@ -488,7 +522,7 @@ fn an_unheld_reference_is_distinguishable_from_a_broken_store() {
 #[test]
 fn mint_clamps_a_lifetime_beyond_the_credentials_maximum() {
     let broker = Broker::new();
-    let receipt = broker.intake(SECRET);
+    let receipt = broker.intake(broker.secret());
     let reference = receipt["reference"].as_str().unwrap().to_string();
 
     let minted = succeeded(&broker.run(&[
@@ -524,7 +558,7 @@ fn custody_material_is_written_with_restricted_modes() {
     use std::os::unix::fs::PermissionsExt;
 
     let broker = Broker::new();
-    let receipt = broker.intake(SECRET);
+    let receipt = broker.intake(broker.secret());
     let reference = receipt["reference"].as_str().unwrap();
     succeeded(&broker.run(&["mint", "--reference", reference]));
 

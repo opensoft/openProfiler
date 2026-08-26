@@ -2038,6 +2038,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "opensoft-open-profiler-broker"
+version = "0.1.4"
+dependencies = [
+ "dirs",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "opensoft-open-profiler-core"
 version = "0.1.4"
 dependencies = [

@@ -1,0 +1,28 @@
+[package]
+name = "opensoft-open-profiler-broker"
+version = "0.1.4"
+description = "Credential custody and short-lived token minting for openProfiler"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "opensoft_open_profiler_broker"
+path = "src/lib.rs"
+
+[[bin]]
+name = "openprofiler-broker"
+path = "src/main.rs"
+
+[dependencies]
+dirs = "6"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

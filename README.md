@@ -63,6 +63,50 @@ Codex or Claude store through distro-specific `\\wsl.localhost` or `\\wsl$`
 paths. Set the profile-store environment variables below when more than one WSL
 store exists.
 
+## Credential broker
+
+`openprofiler-broker` is a separate command-line surface that holds long-lived
+model-provider credentials in openProfiler's custody and mints short-lived,
+scoped tokens for another program to use. It does not touch profile discovery
+or activation, and profile activation does not touch it.
+
+It is deliberately **not** a proxy. A consumer asks for a token, calls the
+provider with that token directly, and the broker is out of the request path.
+
+```bash
+printf '%s' "$PROVIDER_KEY" | openprofiler-broker intake \
+  --binding anthropic-default --provider anthropic --auth-kind api_key \
+  --approved-by "you@example.com" --lifetime-seconds 300
+# {"kind":"openprofiler_broker_intake","reference":"opref-…", …}
+
+openprofiler-broker mint --reference opref-… --scope messages:write
+# {"kind":"openprofiler_broker_mint","token":"…","expires_at":"…","audit_ref":"opaud-…", …}
+
+openprofiler-broker list
+openprofiler-broker revoke --reference opref-…
+```
+
+- A secret is read from standard input, never from argv, and is written to one
+  mode-`0600` custody file under a mode-`0700` root — nowhere else.
+- Every intake, mint and revocation appends a non-secret audit record carrying
+  `issued_by`, `approved_by`, `expires_at` and `audit_ref`.
+- The API-key path is implemented end to end. The OAuth path is declared and
+  refuses honestly with exit code `5` until it is built.
+- Custody store: `OPENPROFILER_BROKER_HOME`, defaulting to
+  `~/.openprofiler/broker`.
+
+**What a minted token carries — stated plainly.** A minted token is
+provider-native in both auth kinds. For an API key that means the mint returns
+the stored key itself: no provider mechanism exists to shorten a plain API
+key's life, so the declared `expires_at` is broker bookkeeping the consumer
+honors rather than an expiry the provider enforces, and each mint says so in an
+`enforcement` field. For OAuth it means a provider-issued access token that is
+genuinely short-lived.
+
+The full declaration — every subcommand, argv shape, stdin and stdout contract,
+exit code, the audit record, the staged OAuth flow, and the consumer binding
+template — is [`docs/broker-cli.md`](docs/broker-cli.md).
+
 ## Discovery
 
 The default stores work on Linux, macOS, and Windows because they are resolved
@@ -130,11 +174,14 @@ pnpm test
 pnpm build
 cargo test -p opensoft-open-profiler-core
 cargo clippy -p opensoft-open-profiler-core --all-targets -- -D warnings
+cargo test -p opensoft-open-profiler-broker
+cargo clippy -p opensoft-open-profiler-broker --all-targets -- -D warnings
 pnpm tauri dev
 ```
 
-The repository includes a Tauri shell, React frontend, isolated Rust core,
-cross-platform icons, CI, Dependabot, security policy, and contribution guide.
+The repository includes a Tauri shell, React frontend, isolated Rust core, the
+credential-broker CLI, cross-platform icons, CI, Dependabot, security policy,
+and contribution guide.
 
 ## Windows installer
 

@@ -664,3 +664,135 @@ fn every_subcommand_answers_version_and_help_on_the_real_binary() {
         "a version query created a custody store"
     );
 }
+
+#[test]
+fn concurrent_brokers_each_append_one_whole_audit_line() {
+    // The audit log is one JSON object per line, and several brokers may share
+    // one store — the dashboard re-mints mid-turn, so overlapping invocations
+    // are the expected case rather than an exotic one. Each record is written
+    // with a single `write` on an append-mode file, which is what makes two
+    // simultaneous appends produce two whole lines instead of one spliced into
+    // the other. This exercises that; it cannot prove it, so the assertion is
+    // on the contract a reader depends on: every line parses.
+    const MINTS: usize = 8;
+    const INTAKES: usize = 4;
+
+    let broker = Broker::new();
+    let reference = broker.intake(broker.secret())["reference"]
+        .as_str()
+        .expect("the receipt names a reference")
+        .to_string();
+
+    let mut children = Vec::new();
+    for _ in 0..INTAKES {
+        let mut child = Command::new(BROKER)
+            .args([
+                "intake",
+                "--binding",
+                "anthropic-concurrent",
+                "--provider",
+                "anthropic",
+                "--auth-kind",
+                "api_key",
+                "--approved-by",
+                "brett@opensoft.one",
+            ])
+            .env("OPENPROFILER_BROKER_HOME", broker.root())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the broker binary runs");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin is piped")
+            .write_all(canary().as_bytes())
+            .expect("the secret reaches the broker");
+        // Closing stdin is the consumer's obligation: intake reads to EOF.
+        drop(child.stdin.take());
+        children.push(child);
+    }
+    for _ in 0..MINTS {
+        children.push(
+            Command::new(BROKER)
+                .args([
+                    "mint",
+                    "--reference",
+                    &reference,
+                    "--scope",
+                    "messages:write",
+                ])
+                .env("OPENPROFILER_BROKER_HOME", broker.root())
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("the broker binary runs"),
+        );
+    }
+
+    for child in children {
+        let output = child.wait_with_output().expect("the broker exits");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "a concurrent broker failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let raw =
+        std::fs::read_to_string(broker.root().join("audit").join("broker-audit.jsonl")).unwrap();
+    assert!(
+        raw.ends_with('\n'),
+        "the last record did not finish its own line"
+    );
+
+    let mut audit_refs = Vec::new();
+    let mut mints = 0;
+    let mut intakes = 0;
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        let record: Value = serde_json::from_str(line).unwrap_or_else(|error| {
+            panic!("an audit line is not one JSON object ({error}): {line:?}")
+        });
+        assert!(
+            record.is_object(),
+            "an audit line is not an object: {line:?}"
+        );
+        assert_eq!(record["kind"], "openprofiler_broker_audit_record");
+        assert_eq!(record["schema_version"], 1);
+        assert!(record.get("token").is_none());
+        assert!(record.get("secret").is_none());
+        audit_refs.push(
+            record["audit_ref"]
+                .as_str()
+                .expect("every record carries an audit_ref")
+                .to_string(),
+        );
+        match record["event"]
+            .as_str()
+            .expect("every record names an event")
+        {
+            "intake" => intakes += 1,
+            "mint" => mints += 1,
+            other => panic!("unexpected audit event {other:?}"),
+        }
+    }
+
+    assert_eq!(mints, MINTS, "one line per mint, no more and no fewer");
+    assert_eq!(
+        intakes,
+        INTAKES + 1,
+        "one line per intake, the setup intake included"
+    );
+
+    let recorded = audit_refs.len();
+    audit_refs.sort();
+    audit_refs.dedup();
+    assert_eq!(
+        audit_refs.len(),
+        recorded,
+        "two records share an audit reference"
+    );
+}

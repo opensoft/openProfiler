@@ -459,6 +459,14 @@ Every `intake`, `mint` and `revoke` appends one JSON object — one line — to
 and by code path: the broker opens it for append and writes a single line; it
 has no rewrite path.
 
+**Concurrent brokers may share one store.** A record — newline included — is
+built in one buffer and handed to exactly one `write` on the append-mode file,
+so two brokers appending at the same moment produce two whole lines in some
+order and never one line spliced into another. A reader may therefore parse the
+file line by line without locking it. A partial write is reported as a custody
+write failure rather than resumed, because a resumed remainder is what would
+break that property.
+
 The mint is the auditable event. Provider calls made under one minted token are
 its children, and the broker neither sees nor records them.
 

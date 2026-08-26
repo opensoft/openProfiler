@@ -613,3 +613,54 @@ fn help_is_printed_on_stdout_and_names_the_declaration() {
         assert!(text.contains(command));
     }
 }
+
+#[test]
+fn every_subcommand_answers_version_and_help_on_the_real_binary() {
+    // docs/broker-cli.md declares `--version` / `-V` and `--help` / `-h`
+    // accepted on the program AND on any subcommand. A consumer asking an
+    // installed broker which version it is talking to reaches for
+    // `mint --version`; an unknown-flag refusal there would be a break in the
+    // declared surface, so it is asserted against the real binary.
+    let broker = Broker::new();
+    for command in ["intake", "mint", "revoke", "list", "authorize"] {
+        for spelling in ["--version", "-V"] {
+            let output = broker.run(&[command, spelling]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "`{command} {spelling}` was refused: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                env!("CARGO_PKG_VERSION"),
+                "`{command} {spelling}` did not print the crate version"
+            );
+            assert!(
+                output.stderr.is_empty(),
+                "`{command} {spelling}` wrote to stderr"
+            );
+        }
+
+        for spelling in ["--help", "-h"] {
+            let output = broker.run(&[command, spelling]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "`{command} {spelling}` was refused: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let text = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                text.contains("docs/broker-cli.md") && text.contains(command),
+                "`{command} {spelling}` did not print the usage"
+            );
+        }
+    }
+
+    // Asking a broker its version must not bring a custody store into being.
+    assert!(
+        !broker.root().exists(),
+        "a version query created a custody store"
+    );
+}

@@ -71,12 +71,25 @@ impl Broker {
             .stderr(Stdio::piped())
             .spawn()
             .expect("the broker binary runs");
-        child
+        let written = child
             .stdin
             .as_mut()
             .expect("stdin is piped")
-            .write_all(stdin)
-            .expect("stdin is written");
+            .write_all(stdin);
+        if let Err(error) = written {
+            // The broker refuses some invocations BEFORE it reads standard
+            // input — an `--auth-kind oauth` intake does exactly that, so a
+            // grant never reaches a process that cannot store it correctly —
+            // and then this write lands on a pipe the child has already
+            // closed. That is the contract working rather than a failure, so
+            // the exit code and stderr are what get asserted. The declaration
+            // puts the same obligation on a real consumer.
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "unexpected failure writing to the broker's standard input"
+            );
+        }
         // Closing stdin is the consumer's obligation: intake reads to EOF.
         drop(child.stdin.take());
         child.wait_with_output().expect("the broker exits")

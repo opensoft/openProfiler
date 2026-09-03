@@ -113,7 +113,7 @@ where that is required.
 - Existing [Keycloak identity brokering](https://github.com/opensoft/openxFactory/blob/main/ideation/brainstorm/keycloak-identity-brokering.md)
   defines one durable human persona per broker instance and organization
   membership without mirroring the tenancy graph.
-- The neutral [openXWallet contracts](https://github.com/opensoft/openxFactory/blob/main/contracts/openxwallet/README.md)
+- The neutral [openXWallet contracts](https://github.com/opensoft/openXwallet/blob/main/contracts/openxwallet/README.md)
   define grants, custody, and holder attribution.
 - The neutral [trust-anchor contracts](https://github.com/opensoft/openxFactory/blob/main/contracts/trust-anchor/README.md)
   define certificate trust and its relationship to wallet custody.

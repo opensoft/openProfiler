@@ -3,3 +3,8 @@ node_modules/
 src-tauri/gen/
 src-tauri/icons/
 target/
+
+# Verbatim import: these five documents were re-homed byte-identical from
+# openxFactory (docs: re-home the identity-persona brainstorm set from
+# openxFactory) and must not be reformatted.
+docs/ideation/brainstorm/

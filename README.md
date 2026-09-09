@@ -183,6 +183,13 @@ The repository includes a Tauri shell, React frontend, isolated Rust core, the
 credential-broker CLI, cross-platform icons, CI, Dependabot, security policy,
 and contribution guide.
 
+Proposed profile-management designs:
+
+- [Codex identity and history profile architecture](docs/codex-history-profile-architecture.md)
+- [Codex credential rotation and synchronization architecture](docs/codex-token-management-architecture.md)
+- [Cloud credential vault and broker feature](docs/cloud-credential-vault-feature.md)
+- [Claude OAuth enrollment and automated reauthentication](docs/claude-oauth-enrollment-automation.md)
+
 ## Windows installer
 
 Version tags publish Windows installers through the

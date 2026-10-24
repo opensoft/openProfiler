@@ -45,14 +45,14 @@ export const devFixtureInventory: ProfileInventory = {
   stores: [
     {
       provider: "codex",
-      manifestPath: "/home/user/.config/workbenches/openai-profiles.json",
+      manifestPath: "/home/user/.config/openbenches/openai-profiles.json",
       profilesHome: "/home/user/.chatgpt-profiles",
       activeHome: "/home/user/.codex",
       issues: [],
     },
     {
       provider: "claude",
-      manifestPath: "/home/user/.config/workbenches/claude-profiles.json",
+      manifestPath: "/home/user/.config/openbenches/claude-profiles.json",
       profilesHome: "/home/user/.claude-profiles",
       activeHome: "/home/user/.claude",
       issues: [],

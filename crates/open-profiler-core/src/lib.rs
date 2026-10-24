@@ -113,6 +113,13 @@ impl Provider {
             Self::Claude => home.join(".claude"),
         }
     }
+
+    fn manifest_file_name(self) -> &'static str {
+        match self {
+            Self::Codex => "openai-profiles.json",
+            Self::Claude => "claude-profiles.json",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,9 +142,7 @@ impl DiscoveryConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".config"));
         let default_codex_profiles_home = Provider::Codex.default_profiles_home(&home);
-        let default_codex_manifest = config_home.join("workbenches/openai-profiles.json");
         let default_claude_profiles_home = Provider::Claude.default_profiles_home(&home);
-        let default_claude_manifest = config_home.join("workbenches/claude-profiles.json");
         let codex_profiles_home_override = env::var_os("CODEX_PROFILES_HOME")
             .or_else(|| env::var_os("CHATGPT_PROFILES_HOME"))
             .map(PathBuf::from);
@@ -147,53 +152,39 @@ impl DiscoveryConfig {
         let claude_profiles_home_override = env::var_os("CLAUDE_PROFILES_HOME").map(PathBuf::from);
         let claude_manifest_override = env::var_os("CLAUDE_PROFILES_MANIFEST").map(PathBuf::from);
         #[cfg(windows)]
-        let (discovered_codex_profiles_home, discovered_codex_manifest) =
+        let (discovered_codex_profiles_home, discovered_codex_config_home) =
             if codex_profiles_home_override.is_some()
                 || default_codex_profiles_home.join("profiles").is_dir()
             {
-                (
-                    default_codex_profiles_home.clone(),
-                    default_codex_manifest.clone(),
-                )
+                (default_codex_profiles_home.clone(), config_home.clone())
             } else {
-                discover_wsl_defaults(Provider::Codex).unwrap_or_else(|| {
-                    (
-                        default_codex_profiles_home.clone(),
-                        default_codex_manifest.clone(),
-                    )
-                })
+                discover_wsl_defaults(Provider::Codex)
+                    .unwrap_or_else(|| (default_codex_profiles_home.clone(), config_home.clone()))
             };
         #[cfg(not(windows))]
-        let (discovered_codex_profiles_home, discovered_codex_manifest) = (
-            default_codex_profiles_home.clone(),
-            default_codex_manifest.clone(),
-        );
+        let (discovered_codex_profiles_home, discovered_codex_config_home) =
+            (default_codex_profiles_home.clone(), config_home.clone());
         #[cfg(windows)]
-        let (discovered_claude_profiles_home, discovered_claude_manifest) =
+        let (discovered_claude_profiles_home, discovered_claude_config_home) =
             if claude_profiles_home_override.is_some()
                 || default_claude_profiles_home.join("profiles").is_dir()
             {
-                (
-                    default_claude_profiles_home.clone(),
-                    default_claude_manifest.clone(),
-                )
+                (default_claude_profiles_home.clone(), config_home.clone())
             } else {
-                discover_wsl_defaults(Provider::Claude).unwrap_or_else(|| {
-                    (
-                        default_claude_profiles_home.clone(),
-                        default_claude_manifest.clone(),
-                    )
-                })
+                discover_wsl_defaults(Provider::Claude)
+                    .unwrap_or_else(|| (default_claude_profiles_home.clone(), config_home.clone()))
             };
         #[cfg(not(windows))]
-        let (discovered_claude_profiles_home, discovered_claude_manifest) = (
-            default_claude_profiles_home.clone(),
-            default_claude_manifest.clone(),
-        );
+        let (discovered_claude_profiles_home, discovered_claude_config_home) =
+            (default_claude_profiles_home.clone(), config_home.clone());
 
         let codex = ProviderConfig {
             provider: Provider::Codex,
-            manifest_path: codex_manifest_override.unwrap_or(discovered_codex_manifest),
+            manifest_path: resolve_manifest_path(
+                &discovered_codex_config_home,
+                Provider::Codex,
+                codex_manifest_override,
+            ),
             profiles_home: codex_profiles_home_override.unwrap_or(discovered_codex_profiles_home),
             active_home: env::var_os("OPENPROFILER_CODEX_ACTIVE_HOME")
                 .or_else(|| env::var_os("PROFILE_SWITCHER_CODEX_ACTIVE_HOME"))
@@ -203,7 +194,11 @@ impl DiscoveryConfig {
 
         let claude = ProviderConfig {
             provider: Provider::Claude,
-            manifest_path: claude_manifest_override.unwrap_or(discovered_claude_manifest),
+            manifest_path: resolve_manifest_path(
+                &discovered_claude_config_home,
+                Provider::Claude,
+                claude_manifest_override,
+            ),
             profiles_home: claude_profiles_home_override.unwrap_or(discovered_claude_profiles_home),
             active_home: env::var_os("OPENPROFILER_CLAUDE_ACTIVE_HOME")
                 .or_else(|| env::var_os("PROFILE_SWITCHER_CLAUDE_ACTIVE_HOME"))
@@ -214,6 +209,28 @@ impl DiscoveryConfig {
         Ok(Self {
             providers: vec![codex, claude],
         })
+    }
+}
+
+fn resolve_manifest_path(
+    config_home: &Path,
+    provider: Provider,
+    manifest_override: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(manifest_path) = manifest_override {
+        return manifest_path;
+    }
+
+    let canonical = config_home
+        .join("openbenches")
+        .join(provider.manifest_file_name());
+    let legacy = config_home
+        .join("workbenches")
+        .join(provider.manifest_file_name());
+    if canonical.is_file() || !legacy.is_file() {
+        canonical
+    } else {
+        legacy
     }
 }
 
@@ -228,16 +245,8 @@ fn discover_wsl_defaults(provider: Provider) -> Option<(PathBuf, PathBuf)> {
             };
             let mut found_in_distribution = false;
             for user in users.filter_map(std::result::Result::ok) {
-                let user_home = user.path();
-                let profiles_home = provider.default_profiles_home(&user_home);
-                if profiles_home.join("profiles").is_dir() {
-                    candidates.push((
-                        profiles_home,
-                        user_home.join(".config/workbenches").join(match provider {
-                            Provider::Codex => "openai-profiles.json",
-                            Provider::Claude => "claude-profiles.json",
-                        }),
-                    ));
+                if let Some(defaults) = wsl_user_defaults(&user.path(), provider) {
+                    candidates.push(defaults);
                     if candidates.len() > 1 {
                         return None;
                     }
@@ -253,6 +262,15 @@ fn discover_wsl_defaults(provider: Provider) -> Option<(PathBuf, PathBuf)> {
     candidates.sort();
     candidates.dedup();
     (candidates.len() == 1).then(|| candidates.remove(0))
+}
+
+#[cfg(any(windows, test))]
+fn wsl_user_defaults(user_home: &Path, provider: Provider) -> Option<(PathBuf, PathBuf)> {
+    let profiles_home = provider.default_profiles_home(user_home);
+    if !profiles_home.join("profiles").is_dir() {
+        return None;
+    }
+    Some((profiles_home, user_home.join(".config")))
 }
 
 #[cfg(windows)]
@@ -1668,6 +1686,139 @@ mod tests {
             .iter()
             .find(|item| item.provider == provider)
             .unwrap()
+    }
+
+    #[test]
+    fn legacy_manifest_is_used_when_only_legacy_file_exists() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            let temp = TempDir::new().unwrap();
+            let legacy = temp
+                .path()
+                .join("workbenches")
+                .join(provider.manifest_file_name());
+            write_file(&legacy, "{}");
+
+            assert_eq!(resolve_manifest_path(temp.path(), provider, None), legacy);
+        }
+    }
+
+    #[test]
+    fn canonical_manifest_is_used_when_only_canonical_file_exists() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            let temp = TempDir::new().unwrap();
+            let canonical = temp
+                .path()
+                .join("openbenches")
+                .join(provider.manifest_file_name());
+            write_file(&canonical, "{}");
+
+            assert_eq!(
+                resolve_manifest_path(temp.path(), provider, None),
+                canonical
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_manifest_wins_without_merging_when_both_exist() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            let temp = TempDir::new().unwrap();
+            let canonical = temp
+                .path()
+                .join("openbenches")
+                .join(provider.manifest_file_name());
+            let legacy = temp
+                .path()
+                .join("workbenches")
+                .join(provider.manifest_file_name());
+            write_file(
+                &canonical,
+                r#"{"version":1,"profiles":[{"name":"canonical"}]}"#,
+            );
+            write_file(&legacy, r#"{"version":1,"profiles":[{"name":"legacy"}]}"#);
+            let manifest_path = resolve_manifest_path(temp.path(), provider, None);
+            let config = DiscoveryConfig {
+                providers: vec![ProviderConfig {
+                    provider,
+                    manifest_path: manifest_path.clone(),
+                    profiles_home: provider.default_profiles_home(temp.path()),
+                    active_home: provider.default_active_home(temp.path()),
+                }],
+            };
+
+            let inventory = discover_profiles(&config);
+            assert_eq!(manifest_path, canonical);
+            assert_eq!(inventory.profiles.len(), 1);
+            assert_eq!(inventory.profiles[0].name, "canonical");
+            assert_eq!(inventory.stores[0].manifest_path, canonical);
+        }
+    }
+
+    #[test]
+    fn explicit_manifest_override_wins_over_default_candidates() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            let temp = TempDir::new().unwrap();
+            let canonical = temp
+                .path()
+                .join("openbenches")
+                .join(provider.manifest_file_name());
+            let legacy = temp
+                .path()
+                .join("workbenches")
+                .join(provider.manifest_file_name());
+            let explicit = temp.path().join("explicit-profiles.json");
+            write_file(&canonical, "{}");
+            write_file(&legacy, "{}");
+
+            assert_eq!(
+                resolve_manifest_path(temp.path(), provider, Some(explicit.clone())),
+                explicit
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_manifest_is_default_for_fresh_installations() {
+        for provider in [Provider::Codex, Provider::Claude] {
+            let temp = TempDir::new().unwrap();
+
+            assert_eq!(
+                resolve_manifest_path(temp.path(), provider, None),
+                temp.path()
+                    .join("openbenches")
+                    .join(provider.manifest_file_name())
+            );
+        }
+    }
+
+    #[test]
+    fn wsl_user_defaults_use_the_same_manifest_selection() {
+        let temp = TempDir::new().unwrap();
+        let user_home = temp.path().join("wsl/home/user");
+        let profiles_home = Provider::Codex.default_profiles_home(&user_home);
+        fs::create_dir_all(profiles_home.join("profiles")).unwrap();
+        let (discovered_profiles_home, config_home) =
+            wsl_user_defaults(&user_home, Provider::Codex).unwrap();
+        let legacy = config_home
+            .join("workbenches")
+            .join(Provider::Codex.manifest_file_name());
+        let canonical = config_home
+            .join("openbenches")
+            .join(Provider::Codex.manifest_file_name());
+        write_file(&legacy, "{}");
+
+        assert_eq!(discovered_profiles_home, profiles_home);
+        assert_eq!(config_home, user_home.join(".config"));
+        assert_eq!(
+            resolve_manifest_path(&config_home, Provider::Codex, None),
+            legacy
+        );
+
+        write_file(&canonical, "{}");
+        assert_eq!(
+            resolve_manifest_path(&config_home, Provider::Codex, None),
+            canonical
+        );
     }
 
     #[cfg(windows)]

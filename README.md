@@ -14,7 +14,8 @@ standard user home.
 
 - Discover Codex profiles under `~/.chatgpt-profiles/profiles`.
 - Discover Claude profiles under `~/.claude-profiles/profiles`.
-- Read optional workBenches manifests and `.profile.json` metadata.
+- Read optional openBenches manifests, with legacy workBenches fallback, and
+  `.profile.json` metadata.
 - Find credential-bearing profile directories even when no manifest exists.
 - Show provider, profile name, declared identity, family, aliases, source, and
   readiness.
@@ -114,8 +115,14 @@ relative to the current user's home directory.
 
 | Provider | Manifest                                     | Profile store         | Active home |
 | -------- | -------------------------------------------- | --------------------- | ----------- |
-| Codex    | `~/.config/workbenches/openai-profiles.json` | `~/.chatgpt-profiles` | `~/.codex`  |
-| Claude   | `~/.config/workbenches/claude-profiles.json` | `~/.claude-profiles`  | `~/.claude` |
+| Codex    | `~/.config/openbenches/openai-profiles.json` | `~/.chatgpt-profiles` | `~/.codex`  |
+| Claude   | `~/.config/openbenches/claude-profiles.json` | `~/.claude-profiles`  | `~/.claude` |
+
+For each provider, openProfiler selects only one manifest. It prefers
+`openbenches` when both files exist, uses `workbenches` when only the legacy
+file exists, and defaults to `openbenches` when neither exists. Native and
+Windows WSL discovery use the same selection, and explicit manifest overrides
+take precedence over both locations.
 
 Environment overrides:
 
@@ -210,7 +217,7 @@ installers as workflow artifacts but do not create a GitHub Release.
 
 ## Compatible metadata
 
-openProfiler recognizes workBenches version 1 manifests:
+openProfiler recognizes openBenches and legacy workBenches version 1 manifests:
 
 ```json
 {

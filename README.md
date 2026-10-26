@@ -6,7 +6,7 @@ Its current provider integrations support Codex and Claude.
 
 openProfiler does not create accounts or store a second credential
 database. It relies on profile directories created by
-[workBenches](https://github.com/opensoft/workBenches) or another compatible
+[openBenches](https://github.com/opensoft/openBenches) or another compatible
 setup, then makes one of those local credentials active in the provider's
 standard user home.
 

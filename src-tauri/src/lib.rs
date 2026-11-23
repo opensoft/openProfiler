@@ -1,16 +1,21 @@
 #[cfg(windows)]
 use opensoft_open_profiler_core::{
-    activate_codex_desktop_profile as activate_desktop,
+    activate_codex_desktop_profile_with_account as activate_desktop,
+    codex_desktop_rollback_account_id,
     codex_desktop_status_from_inventory as inspect_desktop_credentials,
     confirm_codex_desktop_profile as confirm_desktop,
-    rollback_codex_desktop_profile as rollback_desktop, CodexDesktopActivationResult,
+    rollback_codex_desktop_profile_with_account as rollback_desktop, CodexDesktopActivationResult,
     CodexDesktopStatus,
 };
 use opensoft_open_profiler_core::{
-    activate_profile as activate, discover_profiles, ActivationResult, DiscoveryConfig,
-    ProfileInventory, Provider,
+    activate_profile_with_account as activate, codex_profile_account_id, discover_profiles,
+    ActivationResult, DiscoveryConfig, ProfileInventory, Provider,
 };
 use serde::Serialize;
+use tauri::{Manager, State};
+
+mod account_status;
+use account_status::CompanyState;
 #[cfg(windows)]
 use std::env;
 #[cfg(windows)]
@@ -20,9 +25,39 @@ use std::path::PathBuf;
 mod windows_desktop;
 
 #[tauri::command]
-fn activate_profile(provider: Provider, profile_path: String) -> Result<ActivationResult, String> {
-    let config = DiscoveryConfig::from_env().map_err(|error| error.to_string())?;
-    activate(&config, provider, &profile_path).map_err(|error| error.to_string())
+async fn activate_profile(
+    app: tauri::AppHandle,
+    provider: Provider,
+    profile_path: String,
+) -> Result<ActivationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<CompanyState>();
+        let _guard = state
+            .activation
+            .lock()
+            .map_err(|_| "Activation unavailable")?;
+        let config = DiscoveryConfig::from_env().map_err(|error| error.to_string())?;
+        let codex_id =
+            (provider == Provider::Codex).then(|| codex_profile_account_id(&config, &profile_path));
+        let checked_id = codex_id.as_ref().map(|id| id.as_deref());
+        let policy_path = state.authorize(
+            &config,
+            provider,
+            &profile_path,
+            checked_id.flatten(),
+            "activation",
+        )?;
+        activate(
+            &config,
+            provider,
+            &profile_path,
+            checked_id,
+            Some(&policy_path),
+        )
+        .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "Activation unavailable".to_string())?
 }
 
 #[derive(Debug, Serialize)]
@@ -104,11 +139,12 @@ async fn app_snapshot() -> Result<AppSnapshot, String> {
 
 #[tauri::command]
 fn activate_codex_desktop_profile(
+    state: State<'_, CompanyState>,
     profile_path: String,
 ) -> Result<DesktopActivationOutcome, String> {
     #[cfg(not(windows))]
     {
-        let _ = profile_path;
+        let _ = (state, profile_path);
         Err("GPT app switching requires the native Windows openProfiler app".to_string())
     }
 
@@ -121,8 +157,29 @@ fn activate_codex_desktop_profile(
             return Err("The Windows ChatGPT desktop app was not detected".to_string());
         }
 
+        let _guard = state
+            .activation
+            .lock()
+            .map_err(|_| "Activation unavailable")?;
+        let codex_id = codex_profile_account_id(&config, &profile_path);
+        let policy_path = state.authorize(
+            &config,
+            Provider::Codex,
+            &profile_path,
+            codex_id.as_deref(),
+            "desktop_switch",
+        )?;
+        let codex_id = codex_id
+            .as_deref()
+            .ok_or("The saved profile has no reusable GPT login")?;
         windows_desktop::stop_gracefully().map_err(|error| error.to_string())?;
-        let result = activate_desktop(&config, &profile_path, &home);
+        let result = activate_desktop(
+            &config,
+            &profile_path,
+            &home,
+            Some(codex_id),
+            Some(&policy_path),
+        );
         let activation = match result {
             Ok(activation) => activation,
             Err(error) => {
@@ -142,19 +199,29 @@ fn activate_codex_desktop_profile(
 }
 
 #[tauri::command]
-fn rollback_codex_desktop_profile() -> Result<DesktopActivationOutcome, String> {
+fn rollback_codex_desktop_profile(
+    state: State<'_, CompanyState>,
+) -> Result<DesktopActivationOutcome, String> {
     #[cfg(not(windows))]
     {
+        let _ = state;
         Err("GPT app switching requires the native Windows openProfiler app".to_string())
     }
 
     #[cfg(windows)]
     {
+        let _guard = state
+            .activation
+            .lock()
+            .map_err(|_| "Activation unavailable")?;
         let config = DiscoveryConfig::from_env().map_err(|error| error.to_string())?;
         let home = desktop_home(&config)?;
         let app = windows_desktop::inspect();
+        let previous =
+            codex_desktop_rollback_account_id(&home).map_err(|error| error.to_string())?;
+        state.authorize_undo(&config, previous.as_deref())?;
         windows_desktop::stop_gracefully().map_err(|error| error.to_string())?;
-        let result = rollback_desktop(&home);
+        let result = rollback_desktop(&home, Some(previous.as_deref()));
         match result {
             Ok(_) => {
                 let relaunched =
@@ -239,8 +306,18 @@ fn desktop_activation_outcome(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            let local_data = app.path().app_local_data_dir()?;
+            app.manage(CompanyState::from_env(&local_data));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
+            account_status::company_accounts,
+            account_status::company_set_status,
+            account_status::company_sign_in,
+            account_status::company_select,
+            account_status::company_sign_out,
             activate_profile,
             activate_codex_desktop_profile,
             rollback_codex_desktop_profile,

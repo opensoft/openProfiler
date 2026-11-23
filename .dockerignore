@@ -1,0 +1,9 @@
+**/target
+**/node_modules
+.git
+dist
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+.azure/

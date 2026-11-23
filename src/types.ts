@@ -45,6 +45,29 @@ export interface DesktopAppStatus {
   message: string;
 }
 
+export interface CompanyAccount {
+  company_id: string;
+  provider: Provider;
+  account_ref: string;
+  status: "active" | "paused" | "unknown";
+  revision: string | null;
+  display_name: string | null;
+}
+export interface CompanyView {
+  company_id: string | null;
+  companies: string[];
+  signed_in: boolean;
+  accounts: CompanyAccount[];
+  bindings: { provider: Provider; path: string; account_ref: string }[];
+}
+export interface CompanyAccountEdit {
+  company_id: string;
+  provider: Provider;
+  account_ref: string;
+  desired_status: "active" | "paused";
+  expected_revision: string | null;
+  request_id: string;
+}
 export interface AppSnapshot {
   inventory: ProfileInventory;
   desktop: DesktopAppStatus;

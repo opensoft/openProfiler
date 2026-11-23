@@ -64,6 +64,8 @@ pub enum ProfileError {
 
     #[error("Codex desktop credential verification failed after activation")]
     DesktopVerificationFailed,
+    #[error("the profile source changed after the account status check")]
+    ProfileSourceChanged,
 
     #[error(
         "Codex desktop activation failed ({activation}); automatic rollback also failed ({rollback})"
@@ -555,6 +557,56 @@ pub fn activate_profile(
     provider: Provider,
     requested_profile_path: &str,
 ) -> Result<ActivationResult> {
+    activate_profile_with_account(config, provider, requested_profile_path, None, None)
+}
+
+pub fn profile_policy_path(
+    config: &DiscoveryConfig,
+    provider: Provider,
+    path: &str,
+) -> Result<String> {
+    let provider_config =
+        provider_config(config, provider).ok_or_else(|| ProfileError::UnknownProfile {
+            provider,
+            profile_path: path.to_string(),
+        })?;
+    validate_profile_path(path, path)?;
+    let root = provider_config.profiles_home.join("profiles");
+    let (_, policy_path) = checked_profile_source(&root, path)?;
+    Ok(policy_path)
+}
+
+pub fn codex_profile_paths_for_account(
+    config: &DiscoveryConfig,
+    account_id: &str,
+) -> Vec<(String, String)> {
+    provider_config(config, Provider::Codex)
+        .map(|provider| {
+            codex_profile_credentials(config, provider)
+                .into_iter()
+                .filter(|profile| profile.identity.account_id == account_id)
+                .map(|profile| (profile.profile_path, profile.policy_path))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn codex_profile_account_id(config: &DiscoveryConfig, path: &str) -> Option<String> {
+    let provider = provider_config(config, Provider::Codex)?;
+    validate_profile_path(path, path).ok()?;
+    let directory = checked_profile_dir(&provider.profiles_home.join("profiles"), path).ok()?;
+    read_codex_credential_identity(&directory.join(Provider::Codex.credential_name()))
+        .ok()
+        .map(|identity| identity.account_id)
+}
+
+pub fn activate_profile_with_account(
+    config: &DiscoveryConfig,
+    provider: Provider,
+    requested_profile_path: &str,
+    expected_codex_id: Option<Option<&str>>,
+    expected_policy_path: Option<&str>,
+) -> Result<ActivationResult> {
     let provider_config = config
         .providers
         .iter()
@@ -585,7 +637,10 @@ pub fn activate_profile(
     }
 
     let profile_root = provider_config.profiles_home.join("profiles");
-    let profile_dir = checked_profile_dir(&profile_root, &profile.profile_path)?;
+    let (profile_dir, policy_path) = checked_profile_source(&profile_root, &profile.profile_path)?;
+    if expected_policy_path.is_some_and(|expected| expected != policy_path) {
+        return Err(ProfileError::ProfileSourceChanged);
+    }
     let source = profile_dir.join(provider.credential_name());
     ensure_regular_nonempty_file(&source).ok_or_else(|| ProfileError::CredentialUnavailable {
         provider,
@@ -595,7 +650,7 @@ pub fn activate_profile(
     ensure_safe_active_home(&provider_config.active_home)?;
     let target = provider_config.active_home.join(provider.credential_name());
     reject_symlink(&target)?;
-    atomic_copy(&source, &target, provider, &profile.name)?;
+    atomic_copy_checked(&source, &target, provider, &profile.name, expected_codex_id)?;
     let (credential_size, active_modified_unix_secs, active_modified_subsec_nanos) =
         credential_stamp(&target).ok_or_else(|| ProfileError::CredentialUnavailable {
             provider,
@@ -711,6 +766,22 @@ pub fn activate_codex_desktop_profile(
     requested_profile_path: &str,
     desktop_home: &Path,
 ) -> Result<CodexDesktopActivationResult> {
+    activate_codex_desktop_profile_with_account(
+        config,
+        requested_profile_path,
+        desktop_home,
+        None,
+        None,
+    )
+}
+
+pub fn activate_codex_desktop_profile_with_account(
+    config: &DiscoveryConfig,
+    requested_profile_path: &str,
+    desktop_home: &Path,
+    expected_codex_id: Option<&str>,
+    expected_policy_path: Option<&str>,
+) -> Result<CodexDesktopActivationResult> {
     validate_profile_path(requested_profile_path, requested_profile_path)?;
     if desktop_rollback_pending(desktop_home) {
         return Err(ProfileError::DesktopRollbackPending);
@@ -730,6 +801,12 @@ pub fn activate_codex_desktop_profile(
             profile: requested_profile_path.to_string(),
         })?;
 
+    if expected_policy_path.is_some_and(|expected| expected != selected.policy_path) {
+        return Err(ProfileError::ProfileSourceChanged);
+    }
+    if expected_codex_id.is_some_and(|id| id != selected.identity.account_id) {
+        return Err(ProfileError::DesktopVerificationFailed);
+    }
     let credential_state = codex_desktop_credential_state(desktop_home);
     if !credential_state.file_activation_supported {
         let reason = match (
@@ -811,11 +888,12 @@ pub fn activate_codex_desktop_profile(
     atomic_write(&marker_path, &marker_bytes)?;
 
     let activation_result = (|| {
-        atomic_copy(
+        atomic_copy_checked(
             &selected.credential_path,
             &target,
             Provider::Codex,
             &selected.name,
+            Some(Some(&selected.identity.account_id)),
         )?;
         let installed_identity = read_codex_credential_identity(&target)?;
         if installed_identity != selected.identity {
@@ -842,8 +920,28 @@ pub fn activate_codex_desktop_profile(
 }
 
 pub fn rollback_codex_desktop_profile(desktop_home: &Path) -> Result<CodexDesktopRollbackResult> {
+    rollback_codex_desktop_profile_with_account(desktop_home, None)
+}
+
+pub fn codex_desktop_rollback_account_id(desktop_home: &Path) -> Result<Option<String>> {
+    let marker = read_desktop_rollback_marker(&desktop_home.join(DESKTOP_ROLLBACK_MARKER))?;
+    if !marker.previous_credential_present {
+        return Ok(None);
+    }
+    let backup = desktop_home.join(DESKTOP_ROLLBACK_CREDENTIAL);
+    let id = read_codex_credential_identity(&backup)?;
+    Ok(Some(id.account_id))
+}
+
+pub fn rollback_codex_desktop_profile_with_account(
+    desktop_home: &Path,
+    checked_backup: Option<Option<&str>>,
+) -> Result<CodexDesktopRollbackResult> {
     let marker_path = desktop_home.join(DESKTOP_ROLLBACK_MARKER);
     let marker = read_desktop_rollback_marker(&marker_path)?;
+    if checked_backup.is_some_and(|id| id.is_some() != marker.previous_credential_present) {
+        return Err(ProfileError::DesktopVerificationFailed);
+    }
     let target = desktop_home.join(Provider::Codex.credential_name());
     let rollback = desktop_home.join(DESKTOP_ROLLBACK_CREDENTIAL);
 
@@ -859,7 +957,13 @@ pub fn rollback_codex_desktop_profile(desktop_home: &Path) -> Result<CodexDeskto
             return Err(ProfileError::DesktopRollbackUnavailable);
         }
         read_codex_credential_identity(&rollback)?;
-        atomic_copy(&rollback, &target, Provider::Codex, "desktop rollback")?;
+        atomic_copy_checked(
+            &rollback,
+            &target,
+            Provider::Codex,
+            "desktop rollback",
+            checked_backup,
+        )?;
     } else if target.exists() {
         remove_regular_file(&target)?;
     }
@@ -883,6 +987,7 @@ struct CodexProfileCredential {
     name: String,
     profile_path: String,
     credential_path: PathBuf,
+    policy_path: String,
     identity: CodexCredentialIdentity,
 }
 
@@ -911,13 +1016,15 @@ fn codex_profile_credentials_from_inventory(
         .iter()
         .filter(|profile| profile.provider == Provider::Codex && profile.credential_present)
         .filter_map(|profile| {
-            let profile_dir = checked_profile_dir(&profile_root, &profile.profile_path).ok()?;
+            let (profile_dir, policy_path) =
+                checked_profile_source(&profile_root, &profile.profile_path).ok()?;
             let credential_path = profile_dir.join(Provider::Codex.credential_name());
             let identity = read_codex_credential_identity(&credential_path).ok()?;
             Some(CodexProfileCredential {
                 name: profile.name.clone(),
                 profile_path: profile.profile_path.clone(),
                 credential_path,
+                policy_path,
                 identity,
             })
         })
@@ -1304,6 +1411,10 @@ fn marker_matches(
 }
 
 fn checked_profile_dir(profile_root: &Path, profile_path: &str) -> Result<PathBuf> {
+    checked_profile_source(profile_root, profile_path).map(|(directory, _)| directory)
+}
+
+fn checked_profile_source(profile_root: &Path, profile_path: &str) -> Result<(PathBuf, String)> {
     let profile_dir = profile_root.join(profile_path);
     let canonical_root = profile_root
         .canonicalize()
@@ -1317,10 +1428,15 @@ fn checked_profile_dir(profile_root: &Path, profile_path: &str) -> Result<PathBu
             path: profile_dir.clone(),
             source,
         })?;
-    if !canonical_profile.starts_with(&canonical_root) {
-        return Err(ProfileError::EscapedProfileRoot(profile_dir));
-    }
-    Ok(canonical_profile)
+    let relative = canonical_profile
+        .strip_prefix(&canonical_root)
+        .map_err(|_| ProfileError::EscapedProfileRoot(profile_dir))?;
+    let policy_path = if cfg!(windows) {
+        relative.to_string_lossy().replace('\\', "/")
+    } else {
+        relative.to_string_lossy().into_owned()
+    };
+    Ok((canonical_profile, policy_path))
 }
 
 fn validate_identifier(profile: &str, field: &str, value: &str) -> Result<()> {
@@ -1411,6 +1527,16 @@ fn ensure_safe_active_home(path: &Path) -> Result<()> {
 }
 
 fn atomic_copy(source: &Path, target: &Path, provider: Provider, profile: &str) -> Result<()> {
+    atomic_copy_checked(source, target, provider, profile, None)
+}
+
+fn atomic_copy_checked(
+    source: &Path,
+    target: &Path,
+    provider: Provider,
+    profile: &str,
+    codex_id: Option<Option<&str>>,
+) -> Result<()> {
     reject_symlink(target)?;
     let mut input = open_file_no_follow(source)?;
     if !input
@@ -1435,6 +1561,25 @@ fn atomic_copy(source: &Path, target: &Path, provider: Provider, profile: &str) 
         source,
     })?;
     drop(output);
+    if let Some(expected) = codex_id {
+        let actual = match read_codex_credential_identity(&temp) {
+            Ok(identity) => Some(identity.account_id),
+            Err(ProfileError::UnsupportedDesktopCredential { .. }) => None,
+            Err(ProfileError::Read { source, .. })
+                if source.kind() == io::ErrorKind::InvalidData =>
+            {
+                None
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&temp);
+                return Err(error);
+            }
+        };
+        if actual.as_deref() != expected {
+            let _ = fs::remove_file(&temp);
+            return Err(ProfileError::DesktopVerificationFailed);
+        }
+    }
 
     replace_file(&temp, target).inspect_err(|_| {
         let _ = fs::remove_file(&temp);
@@ -2005,6 +2150,63 @@ mod tests {
         write_file(&codex.active_home.join("auth.json"), "external-change");
         let inventory = discover_profiles(&config);
         assert!(!inventory.profiles[0].active);
+    }
+
+    #[test]
+    fn activation_rejects_source_different_from_admission() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        write_file(
+            &codex.profiles_home.join("profiles/work/auth.json"),
+            "new-credential",
+        );
+        let active = codex.active_home.join("auth.json");
+        write_file(&active, "previous-credential");
+
+        let error = activate_profile_with_account(
+            &config,
+            Provider::Codex,
+            "work",
+            None,
+            Some("different"),
+        )
+        .unwrap_err();
+        assert!(matches!(error, ProfileError::ProfileSourceChanged));
+        assert_eq!(fs::read_to_string(active).unwrap(), "previous-credential");
+    }
+
+    #[test]
+    fn activation_cannot_gain_a_codex_account_after_unidentified_admission() {
+        let temp = TempDir::new().unwrap();
+        let config = config(&temp);
+        let codex = provider_config(&config, Provider::Codex);
+        let source = codex.profiles_home.join("profiles/work/auth.json");
+        let active = codex.active_home.join("auth.json");
+        let old = r#"{"OPENAI_API_KEY":"test"}"#;
+        write_file(&source, old);
+        write_file(&active, "previous-credential");
+        let claimed = codex_profile_account_id(&config, "work");
+        assert!(claimed.is_none());
+        write_file(&source, &codex_auth("company-account", "new"));
+
+        let activate = || {
+            activate_profile_with_account(
+                &config,
+                Provider::Codex,
+                "work",
+                Some(claimed.as_deref()),
+                Some("work"),
+            )
+        };
+        assert!(matches!(
+            activate(),
+            Err(ProfileError::DesktopVerificationFailed)
+        ));
+        assert_eq!(fs::read_to_string(&active).unwrap(), "previous-credential");
+        write_file(&source, old);
+        activate().unwrap();
+        assert_eq!(fs::read_to_string(active).unwrap(), old);
     }
 
     #[test]

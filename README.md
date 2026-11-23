@@ -64,6 +64,10 @@ Codex or Claude store through distro-specific `\\wsl.localhost` or `\\wsl$`
 paths. Set the profile-store environment variables below when more than one WSL
 store exists.
 
+## Shared company account status
+
+Deploy the hosted service and configure a company sign-in and account bindings to share account status with other desktops and workloads. See [hosted account status setup](crates/open-profiler-account-status/README.md).
+
 ## Credential broker
 
 `openprofiler-broker` is a separate command-line surface that holds long-lived

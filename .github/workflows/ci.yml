@@ -41,6 +41,64 @@ jobs:
       - run: cargo test -p opensoft-open-profiler-broker
       - run: cargo clippy -p opensoft-open-profiler-broker --all-targets -- -D warnings
 
+  account-status-engine:
+    name: Account status on ${{ matrix.engine }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: postgres
+            image: postgres:17
+            protocol: postgres
+            port: 5432
+          - engine: mariadb
+            image: mariadb:11.4
+            protocol: mysql
+            port: 3306
+          - engine: mysql
+            image: mysql:8.4
+            protocol: mysql
+            port: 3306
+    env:
+      OPENPROFILER_TEST_DB_ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Start the isolated database fixture
+        env:
+          ENGINE: ${{ matrix.engine }}
+          IMAGE: ${{ matrix.image }}
+          PROTOCOL: ${{ matrix.protocol }}
+          PORT: ${{ matrix.port }}
+        run: |
+          DB_PASSWORD=$(openssl rand -hex 24)
+          ROOT_PASSWORD=$(openssl rand -hex 24)
+          echo "::add-mask::$DB_PASSWORD"
+          echo "::add-mask::$ROOT_PASSWORD"
+          printf 'OPENPROFILER_TEST_DB_URL=%s://op:%s@127.0.0.1:33456/profile\n' "$PROTOCOL" "$DB_PASSWORD" >> "$GITHUB_ENV"
+          docker run --rm -d --name profile-db -p "127.0.0.1:33456:$PORT" \
+            -e POSTGRES_USER=op -e POSTGRES_PASSWORD="$DB_PASSWORD" -e POSTGRES_DB=profile \
+            -e MARIADB_ROOT_PASSWORD="$ROOT_PASSWORD" -e MARIADB_USER=op -e MARIADB_PASSWORD="$DB_PASSWORD" -e MARIADB_DATABASE=profile \
+            -e MYSQL_ROOT_PASSWORD="$ROOT_PASSWORD" -e MYSQL_USER=op -e MYSQL_PASSWORD="$DB_PASSWORD" -e MYSQL_DATABASE=profile "$IMAGE"
+          for attempt in {1..45}; do
+            case "$ENGINE" in
+              postgres) docker exec profile-db pg_isready -h 127.0.0.1 -U op -d profile && exit 0 ;;
+              mariadb) docker exec -e MYSQL_PWD="$DB_PASSWORD" profile-db mariadb -h 127.0.0.1 -uop profile -e "SELECT 1" && exit 0 ;;
+              mysql) docker exec -e MYSQL_PWD="$DB_PASSWORD" profile-db mysql -h 127.0.0.1 -uop profile -e "SELECT 1" && exit 0 ;;
+            esac
+            sleep 2
+          done
+          docker logs profile-db
+          exit 1
+      - run: cargo test --locked -p opensoft-open-profiler-account-status --lib
+      - run: cargo test --locked -p opensoft-open-profiler-account-status --test http_status -- --ignored
+      - run: python3 integrations/smoke_shared_status.py
+      - run: cargo clippy --locked -p opensoft-open-profiler-account-status --all-targets -- -D warnings
+
   windows:
     name: Windows core and shell
     runs-on: windows-latest

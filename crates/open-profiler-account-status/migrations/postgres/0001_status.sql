@@ -1,0 +1,44 @@
+CREATE TABLE IF NOT EXISTS company_projection (
+    company_id VARCHAR(128) COLLATE "C" PRIMARY KEY,
+    generation BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    snapshot TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS company_account (
+    company_id VARCHAR(128) COLLATE "C" NOT NULL,
+    provider VARCHAR(32) COLLATE "C" NOT NULL,
+    account_ref VARCHAR(128) COLLATE "C" NOT NULL,
+    status VARCHAR(8),
+    revision BIGINT,
+    PRIMARY KEY (company_id, provider, account_ref),
+    CONSTRAINT valid_status CHECK (
+        (status IS NULL AND revision IS NULL) OR
+        (status IS NOT NULL AND revision IS NOT NULL AND status IN ('active', 'paused') AND revision > 0)
+    )
+);
+
+CREATE TABLE IF NOT EXISTS status_transition (
+    company_id VARCHAR(128) COLLATE "C" NOT NULL,
+    provider VARCHAR(32) COLLATE "C" NOT NULL,
+    account_ref VARCHAR(128) COLLATE "C" NOT NULL,
+    revision BIGINT NOT NULL,
+    actor VARCHAR(64) COLLATE "C" NOT NULL,
+    previous_status VARCHAR(8),
+    status VARCHAR(8) NOT NULL,
+    committed_at BIGINT NOT NULL,
+    request_id VARCHAR(36) COLLATE "C" NOT NULL,
+    PRIMARY KEY (company_id, provider, account_ref, revision)
+);
+
+CREATE TABLE IF NOT EXISTS accepted_status_write (
+    company_id VARCHAR(128) COLLATE "C" NOT NULL,
+    provider VARCHAR(32) COLLATE "C" NOT NULL,
+    account_ref VARCHAR(128) COLLATE "C" NOT NULL,
+    actor VARCHAR(64) COLLATE "C" NOT NULL,
+    request_id VARCHAR(36) COLLATE "C" NOT NULL,
+    desired_status VARCHAR(8) NOT NULL,
+    expected_revision BIGINT,
+    accepted_revision BIGINT NOT NULL,
+    PRIMARY KEY (company_id, provider, account_ref, actor, request_id)
+);

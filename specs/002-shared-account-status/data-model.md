@@ -1,0 +1,33 @@
+# Data Model for Shared Company Account Status
+
+All account references are opaque, non-secret identifiers. The server resolves provider, company, and binding context from trusted registrations and grants.
+
+| Record                      | Identity and fields                                                                                                                                                               | Rules                                                                                                                                                                                                                                                    |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Registered account          | Company ID, provider, canonical account reference, optional safe display label                                                                                                    | Composite key. The provider account identifier is mapped by the trusted source. Alias, email, local path, and registry lifecycle status cannot become identity or shared status. Keep the row before the first operator decision.                        |
+| Effective grant             | Authenticated subject or workload identity, account key, permitted actions, applicable environment, host, persona, factory instance, and role, grant source revision and validity | The publisher supplies the complete scope. Human and machine bindings share account references. A runtime can read and obtain decisions only for its use grants. Keep management permission explicit. Revoke grants without deleting account or history. |
+| Current status              | Registered account row plus nullable status, nullable revision                                                                                                                    | Before first decision, both are null and the API returns Unknown with a null revision. Thereafter Active or Paused with a positive, strictly increasing revision. Allow multiple Active accounts.                                                        |
+| Status transition           | Account key, resulting revision, previous and resulting state, actor reference, server time, request ID                                                                           | Append in the same transaction as the status change. Unique by account and revision. Initial transition starts from Unknown. A no-op adds no transition.                                                                                                 |
+| Accepted write              | Account key, authenticated actor, request ID, normalized desired state, expected revision, applied revision and outcome                                                           | Same actor/account/request ID with identical input replays once authorized and returns the current status. Different input under the same key conflicts. Store accepted no-ops too so a delayed replay cannot change state.                              |
+| Desktop profile association | Trusted enrollment or verified configured link between a local provider profile and a company account key                                                                         | Link aliases to the same account. Keep managed classification when the association is missing or ambiguous. The server stores no paths. Rollback metadata identifies the actual managed target while protected by existing local file rules.             |
+| Admission decision          | Company, provider, account reference, observed revision, operation kind and ID                                                                                                    | An ephemeral, authenticated decision for one operation. Consumers match it to the current request and target, reject late or mismatched replies, and use existing dispatch ownership to prevent duplicate starts. No database issuance row is required.  |
+
+## State Transitions
+
+```text
+Registered (Unknown, revision null)
+  -> Active or Paused (revision 1)
+Active (revision n) -> Paused (revision n + 1)
+Paused (revision n) -> Active (revision n + 1)
+```
+
+Compare the expected revision after locking the registration row, under the same effective authorization used to write. Check for an authorized replay before comparing its original expected revision. Return the current revision on replay or stale conflict. Read and admission queries fetch the effective grant and status in one statement on the configured writer. For authorization mutations, lock the stable grant scope row before locking the registered account row when both are needed. Use the same grant scope lock for publication, so status edits and revocations have a defined order.
+
+## Storage Invariants on Each Engine
+
+- Use explicit READ COMMITTED semantics for account writes and grant publication. Use InnoDB for all authority tables on MariaDB and MySQL, with row locks in real transactions. Use unique-key lookups for the locked scope and account rows.
+- Preserve case-sensitive, byte-exact opaque key equality and deterministic cursor ordering on all engines. Use binary key types or tested equivalents. Keep revisions within a shared positive signed 64-bit range and retain the existing decimal-string API representation.
+- Commit authority state, audit, and accepted requests atomically. Retry within a bound only when the previous transaction is known to have rolled back. If the commit result is unknown, recover through the existing request ID and payload.
+- Version schema migrations by dialect. Detect partial upgrades and verify the resulting schema before serving. Some MariaDB and MySQL schema statements commit implicitly, so test interrupted-migration recovery separately from runtime transaction rollback. [MariaDB implicit commits](https://mariadb.com/docs/server/reference/sql-statements/transactions/sql-statements-that-cause-an-implicit-commit) · [MySQL implicit commits](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html)
+
+A company change or sign-out invalidates old UI responses independently of account revisions. All quantities in fixtures and history are metadata. Provider tokens, session material, and raw identity assertions stay out of the records.

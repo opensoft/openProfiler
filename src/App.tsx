@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { CompanyAccounts } from "./CompanyAccounts";
 import { getVersion } from "@tauri-apps/api/app";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -514,9 +515,15 @@ export default function App() {
         </div>
         <div className="privacy-badge">
           <span className="privacy-badge__dot" />
-          Local-only activation
+          Local credential storage
         </div>
       </header>
+
+      <CompanyAccounts
+        profiles={inventory?.profiles ?? []}
+        desktopActivePaths={desktop?.activeProfilePaths ?? []}
+        windowsPaths={desktop?.platformSupported}
+      />
 
       <section className="summary" aria-label="Profile inventory summary">
         <div>

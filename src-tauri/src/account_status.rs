@@ -441,10 +441,7 @@ impl Config {
                 Ok(real_root) if is_inside(resolved, &real_root) => return Ok(true),
                 Ok(_) => (),
                 Err(ProfileError::Read { source, .. })
-                    if source.kind() == io::ErrorKind::NotFound =>
-                {
-                    ()
-                }
+                    if source.kind() == io::ErrorKind::NotFound => {}
                 Err(_) => return Err("Company-managed profile root could not be verified".into()),
             }
         }

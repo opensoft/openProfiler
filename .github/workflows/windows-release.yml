@@ -67,7 +67,8 @@ jobs:
 
       - name: Validate application
         run: |
-          pnpm format:check
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm format:check --end-of-line auto
           pnpm test
           cargo fmt --all --check
           cargo test --workspace

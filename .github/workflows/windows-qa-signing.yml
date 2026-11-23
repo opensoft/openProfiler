@@ -92,6 +92,7 @@ jobs:
         with:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           path: qa-artifact
+          merge-multiple: true
 
       - name: Verify the signing input
         shell: pwsh

@@ -108,7 +108,7 @@ jobs:
           if ($env:EXPECTED_SHA256 -notmatch '^[A-F0-9]{64}$' -or
               (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -ne $env:EXPECTED_SHA256 -or
               (Get-AuthenticodeSignature -LiteralPath $exe).Status -ne 'NotSigned') {
-            throw 'Signing input differs from this run’s unsigned build'
+            throw 'Signing input differs from the unsigned build for this run'
           }
 
       - name: Authenticate the dedicated QA signer

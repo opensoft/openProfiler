@@ -130,7 +130,7 @@ impl CompanyState {
         let mut association = None;
         for config in configs {
             let managed = config.manages_source(discovery, provider, path, &resolved)?;
-            if managed && !same_path(path, &resolved) {
+            if managed && !config.matches_managed_source(discovery, provider, path, &resolved) {
                 return Err(
                     "A company-managed profile must be selected by its enrolled path".into(),
                 );
@@ -449,6 +449,36 @@ impl Config {
             }
         }
         Ok(false)
+    }
+
+    fn matches_managed_source(
+        &self,
+        discovery: &DiscoveryConfig,
+        provider: Provider,
+        path: &str,
+        resolved: &str,
+    ) -> bool {
+        if same_path(path, resolved) {
+            return true;
+        }
+        self.managed_roots.iter().any(|root| {
+            if !root.matches(provider, path) {
+                return false;
+            }
+            let Ok(real_root) = profile_policy_path(discovery, provider, &root.path) else {
+                return false;
+            };
+            // A declared root may be an alias. The path below it still has to
+            // identify the same profile after resolving that root.
+            let suffix: PathBuf = Path::new(path)
+                .components()
+                .skip(Path::new(&root.path).components().count())
+                .collect();
+            Path::new(&real_root)
+                .join(suffix)
+                .to_str()
+                .is_some_and(|expected| same_path(expected, resolved))
+        })
     }
 
     fn binding(
@@ -1121,6 +1151,43 @@ mod tests {
         assert!(config
             .manages_source(&discovery, Provider::Codex, "outside", "outside")
             .unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enrolled_path_can_resolve_through_a_linked_managed_root() {
+        let tmp = TestDirectory::new();
+        let real = tmp.profile("stored/enrolled", "managed-account");
+        let different = tmp.profile("other", "different-account");
+        let discovery = tmp.discovery();
+        std::os::unix::fs::symlink(real.parent().unwrap(), tmp.0.join("profiles/managed")).unwrap();
+        std::os::unix::fs::symlink(different, tmp.0.join("profiles/stored/redirect")).unwrap();
+        let mut config = parse_configs(COMPANY).unwrap().remove(0);
+        let enrolled = "managed/enrolled";
+        config.profiles.push(Binding {
+            provider: Provider::Codex,
+            path: enrolled.into(),
+            account_ref: "approved-account".into(),
+            codex_account_id: Some("managed-account".into()),
+        });
+        assert!(config.validate().is_ok());
+        assert!(config
+            .binding(Provider::Codex, enrolled, Some("managed-account"), true)
+            .unwrap()
+            .is_some());
+        let resolved = profile_policy_path(&discovery, Provider::Codex, enrolled).unwrap();
+        assert!(config.matches_managed_source(&discovery, Provider::Codex, enrolled, &resolved));
+        let redirected = "managed/redirect";
+        let resolved = profile_policy_path(&discovery, Provider::Codex, redirected).unwrap();
+        assert!(!config.matches_managed_source(&discovery, Provider::Codex, redirected, &resolved));
+        assert!(config
+            .binding(
+                Provider::Codex,
+                "stored/enrolled",
+                Some("managed-account"),
+                true
+            )
+            .is_err());
     }
 
     #[cfg(windows)]

@@ -5,7 +5,8 @@ use opensoft_open_profiler_account_status::{
     http,
     store::{Engine, Store},
 };
-use std::{env, fs, net::SocketAddr};
+use std::{env, net::SocketAddr};
+use tokio::fs;
 
 #[tokio::main]
 async fn main() {
@@ -28,7 +29,9 @@ async fn run() -> Result<(), &'static str> {
         Engine::parse(&env::var("STATUS_DB_ENGINE").map_err(|_| "missing database engine")?)
             .ok_or("invalid database engine")?;
     let database_file = env::var_os("STATUS_DB_URL_FILE").ok_or("missing database secret file")?;
-    let database = fs::read_to_string(database_file).map_err(|_| "database secret unavailable")?;
+    let database = fs::read_to_string(database_file)
+        .await
+        .map_err(|_| "database secret unavailable")?;
     let store = Store::connect(engine, database.trim(), fixture)
         .await
         .map_err(|_| "database writer unavailable")?;
@@ -38,9 +41,11 @@ async fn run() -> Result<(), &'static str> {
         .map_err(|_| "database schema unavailable")?;
     let identity =
         env::var_os("STATUS_IDENTITY_FILE").ok_or("missing identity configuration file")?;
-    let file = fs::File::open(identity).map_err(|_| "identity configuration unavailable")?;
+    let file = fs::read(identity)
+        .await
+        .map_err(|_| "identity configuration unavailable")?;
     let config: IdentityConfig =
-        serde_json::from_reader(file).map_err(|_| "invalid identity configuration")?;
+        serde_json::from_slice(&file).map_err(|_| "invalid identity configuration")?;
     let auth = Auth::connect(config.clone(), fixture).await?;
     auth.refresh_in_background();
     let listener = tokio::net::TcpListener::bind(listen)

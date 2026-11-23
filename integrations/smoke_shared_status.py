@@ -1,6 +1,7 @@
 """Exercise the real service and deployed Python client over local fixture HTTPS.
 
-Inputs are the built service binary, disposable database engine, and database URI.
+Build the workspace service with Cargo and set the disposable database engine and URI
+in OPENPROFILER_TEST_DB_ENGINE and OPENPROFILER_TEST_DB_URL.
 The fixture generates short-lived synthetic signing keys and uses loopback only.
 """
 
@@ -12,7 +13,6 @@ import os
 from pathlib import Path
 import ssl
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -40,7 +40,11 @@ class Quiet(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def main(binary, engine, database):
+def main():
+    worktree = Path(__file__).resolve().parents[1]
+    binary = worktree / "target/debug/opensoft-open-profiler-account-status"
+    engine = os.environ["OPENPROFILER_TEST_DB_ENGINE"]
+    database = os.environ["OPENPROFILER_TEST_DB_URL"]
     with tempfile.TemporaryDirectory() as work:
         root = Path(work)
         key, certificate = root / "key.pem", root / "cert.pem"
@@ -70,6 +74,13 @@ def main(binary, engine, database):
             "jwks_url": issuer + "/jwks", "publishers": {company: [actor("publisher")]}}))
         dsn = root / "database-uri"
         dsn.write_text(database)
+        account_route = f"/v1/companies/{company}/accounts/claude/account-a"
+        routes = (
+            ("GET", account_route),
+            ("POST", account_route + "/admissions"),
+            ("PUT", account_route + "/status"),
+            ("PUT", f"/v1/control/companies/{company}/binding-projection"),
+        )
         backend_port = 48374
         backend = f"http://127.0.0.1:{backend_port}"
         process = subprocess.Popen([binary], env={
@@ -90,11 +101,28 @@ def main(binary, engine, database):
 
             class Proxy(Quiet):
                 def relay(self):
-                    incoming = self.headers.get("Content-Length")
-                    content = self.rfile.read(int(incoming)) if incoming else None
+                    route = next(
+                        ((method, path) for method, path in routes
+                         if self.command == method and self.path == path), None
+                    )
+                    if route is None:
+                        self.send_error(404)
+                        return
+                    method, path = route
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                    except ValueError:
+                        self.send_error(400)
+                        return
+                    if not 0 <= length <= 16_384:
+                        self.send_error(413)
+                        return
+                    content = self.rfile.read(length) if length else None
+                    headers = {name: self.headers[name] for name in ("Authorization", "Content-Type")
+                               if name in self.headers}
                     with_backend = http.client.HTTPConnection("127.0.0.1", backend_port, timeout=5)
                     try:
-                        with_backend.request(self.command, self.path, content, dict(self.headers))
+                        with_backend.request(method, path, content, headers)
                         response = with_backend.getresponse()
                         self.send_response(response.status)
                         self.send_header("Content-Type", "application/json")
@@ -177,4 +205,4 @@ def main(binary, engine, database):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    main()

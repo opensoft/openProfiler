@@ -14,7 +14,7 @@ serde_json.workspace = true
 sha2 = "0.10"
 sqlx = { version = "=0.8.6", default-features = false, features = ["any", "postgres", "mysql", "runtime-tokio", "tls-rustls-ring-webpki", "migrate", "macros"] }
 thiserror.workspace = true
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "signal", "fs"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]

@@ -181,7 +181,7 @@ export function CompanyAccounts({
         </h2>
         {view && view.companies.length > 1 ? (
           <label>
-            Company
+            <span>Company</span>
             <select
               disabled={busy}
               value={view.company_id ?? ""}

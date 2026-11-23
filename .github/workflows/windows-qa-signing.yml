@@ -1,0 +1,169 @@
+name: Windows QA Signing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/windows-qa-signing.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "assets/**"
+      - "crates/**"
+      - "index.html"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "src/**"
+      - "src-tauri/**"
+      - "tsconfig*.json"
+      - "vite.config.ts"
+  pull_request:
+    paths:
+      - ".github/workflows/windows-qa-signing.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build Windows QA executable
+    runs-on: windows-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+      sha256: ${{ steps.stage.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.17.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build the application
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm tauri build --no-bundle --ci
+          git diff --exit-code -- Cargo.lock pnpm-lock.yaml
+
+      - name: Record the unsigned executable digest
+        id: stage
+        shell: pwsh
+        run: |
+          $exe = 'target/release/opensoft-open-profiler.exe'
+          if ((Get-AuthenticodeSignature -LiteralPath $exe).Status -ne 'NotSigned') {
+            throw 'The build must supply an unsigned executable'
+          }
+          "sha256=$((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)" >> $env:GITHUB_OUTPUT
+
+      - name: Upload the unsigned QA executable
+        id: unsigned
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openprofiler-windows-qa-unsigned-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/release/opensoft-open-profiler.exe
+          if-no-files-found: error
+          retention-days: 2
+
+  sign:
+    name: Sign and verify Windows QA executable
+    if: >-
+      github.repository == 'opensoft/openProfiler' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    environment: windows-qa-signing
+    permissions:
+      actions: read
+      id-token: write
+    steps:
+      - name: Download this run's unsigned executable
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: qa-artifact
+
+      - name: Verify the signing input
+        shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          $items = @(Get-ChildItem -LiteralPath qa-artifact -Force)
+          if ($items.Count -ne 1 -or $items[0].PSIsContainer -or
+              $items[0].Name -ne 'opensoft-open-profiler.exe') {
+            throw 'Unexpected signing input'
+          }
+          $exe = $items[0].FullName
+          if ($env:EXPECTED_SHA256 -notmatch '^[A-F0-9]{64}$' -or
+              (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -ne $env:EXPECTED_SHA256 -or
+              (Get-AuthenticodeSignature -LiteralPath $exe).Status -ne 'NotSigned') {
+            throw 'Signing input differs from this run’s unsigned build'
+          }
+
+      - name: Authenticate the dedicated QA signer
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Sign the QA executable with Microsoft Artifact Signing
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: OpenSoftPublicProfile
+          files: ${{ github.workspace }}\qa-artifact\opensoft-open-profiler.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          correlation-id: openprofiler-qa-${{ github.run_id }}-${{ github.run_attempt }}
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+
+      - name: Verify Authenticode and record the signed artifact digest
+        shell: pwsh
+        env:
+          UNSIGNED_SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          $exe = 'qa-artifact/opensoft-open-profiler.exe'
+          $signature = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate -or
+              $signature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Opensoft Inc(,|$)') {
+            throw 'Expected a trusted, timestamped Opensoft Inc signature'
+          }
+          [ordered]@{
+            revision = $env:GITHUB_SHA
+            run_id = $env:GITHUB_RUN_ID
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            file = 'opensoft-open-profiler.exe'
+            unsigned_sha256 = $env:UNSIGNED_SHA256
+            signed_sha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+            publisher = $signature.SignerCertificate.Subject
+            signer_thumbprint = $signature.SignerCertificate.Thumbprint
+          } | ConvertTo-Json | Set-Content -LiteralPath qa-artifact/signing-receipt.json -Encoding utf8
+
+      - name: Upload the signed QA executable and receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openprofiler-windows-qa-signed-${{ github.sha }}-${{ github.run_attempt }}
+          path: qa-artifact/
+          if-no-files-found: error
+          retention-days: 14

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
-    io::{self, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -65,6 +65,7 @@ struct Session {
     company: usize,
     generation: u64,
     token: Option<String>,
+    sign_in_url: Option<Url>,
 }
 
 pub(crate) struct CompanyState {
@@ -112,6 +113,7 @@ impl CompanyState {
             session.company = index;
             session.generation += 1;
             session.token = None;
+            session.sign_in_url = None;
         }
         Ok(())
     }
@@ -201,6 +203,7 @@ impl CompanyState {
         if status == StatusCode::UNAUTHORIZED {
             session.generation += 1;
             session.token = None;
+            session.sign_in_url = None;
             return Err("Company session expired. Sign in again".into());
         }
         Ok(())
@@ -899,6 +902,7 @@ pub(crate) fn company_sign_out(state: State<'_, CompanyState>) -> Result<(), Str
         .map_err(|_| "Company session unavailable")?;
     session.generation += 1;
     session.token = None;
+    session.sign_in_url = None;
     Ok(())
 }
 
@@ -907,6 +911,25 @@ pub(crate) async fn company_sign_in(app: tauri::AppHandle) -> Result<(), String>
     tauri::async_runtime::spawn_blocking(move || sign_in(&app.state::<CompanyState>()))
         .await
         .map_err(|_| "Company sign-in unavailable".to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn company_reopen_sign_in(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<CompanyState>();
+        let url = state
+            .session
+            .lock()
+            .map_err(|_| "Company session unavailable")?
+            .sign_in_url
+            .clone()
+            .ok_or(
+                "The sign-in page is no longer available. Start sign-in again in openProfiler.",
+            )?;
+        open_browser(&url)
+    })
+    .await
+    .map_err(|_| "Company sign-in unavailable".to_string())?
 }
 
 fn sign_in(state: &CompanyState) -> Result<(), String> {
@@ -923,12 +946,26 @@ fn sign_in(state: &CompanyState) -> Result<(), String> {
         .configs()?
         .get(company)
         .ok_or("Company service is not configured")?;
-    let token = browser_login(config, || {
-        state
-            .session
-            .lock()
-            .is_ok_and(|s| s.generation == generation)
-    })?;
+    let token = browser_login(
+        config,
+        |url| {
+            let mut session = state
+                .session
+                .lock()
+                .map_err(|_| "Company session unavailable")?;
+            if session.generation != generation {
+                return Err("Company sign-in was cancelled".into());
+            }
+            session.sign_in_url = Some(url.clone());
+            Ok(())
+        },
+        || {
+            state
+                .session
+                .lock()
+                .is_ok_and(|s| s.generation == generation)
+        },
+    );
     let mut session = state
         .session
         .lock()
@@ -936,11 +973,20 @@ fn sign_in(state: &CompanyState) -> Result<(), String> {
     if session.generation != generation {
         return Err("The company session changed".into());
     }
-    session.token = Some(token);
+    session.sign_in_url = None;
+    session.token = Some(token?);
     Ok(())
 }
 
-fn browser_login(config: &Config, current: impl Fn() -> bool) -> Result<String, String> {
+fn open_browser(url: &Url) -> Result<(), String> {
+    open::that_detached(url.as_str()).map_err(|_| "Could not open the system browser".to_string())
+}
+
+fn browser_login(
+    config: &Config,
+    remember_url: impl FnOnce(&Url) -> Result<(), String>,
+    current: impl Fn() -> bool,
+) -> Result<String, String> {
     let listener =
         TcpListener::bind("127.0.0.1:0").map_err(|_| "Could not open the login callback")?;
     listener
@@ -965,30 +1011,41 @@ fn browser_login(config: &Config, current: impl Fn() -> bool) -> Result<String, 
         ("state", state.as_str()),
         ("redirect_uri", callback.as_str()),
     ]);
-    open::that(url.as_str()).map_err(|_| "Could not open the system browser")?;
+    remember_url(&url)?;
+    open_browser(&url)?;
     let deadline = Instant::now() + Duration::from_secs(120);
     let code = loop {
-        if !current() || Instant::now() >= deadline {
-            return Err("Company sign-in expired or was cancelled".into());
+        if !current() {
+            return Err("Company sign-in was cancelled".into());
         }
-        let Ok((mut stream, _)) = listener.accept() else {
-            thread::sleep(Duration::from_millis(100));
-            continue;
+        if Instant::now() >= deadline {
+            return Err(
+                "Company sign-in timed out. Start sign-in again to open a new browser tab.".into(),
+            );
+        }
+        let mut stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(_) => return Err("The company sign-in callback is unavailable".into()),
         };
         let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
         let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-        let mut bytes = [0; 8192];
-        let code = stream
-            .read(&mut bytes)
-            .ok()
-            .and_then(|n| std::str::from_utf8(&bytes[..n]).ok())
-            .and_then(|v| v.lines().next())
-            .and_then(|line| callback_code(line, &state));
-        if let Some(code) = code {
-            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nReturn to openProfiler to finish signing in.");
-            break code;
+        match read_callback(&mut stream, &state) {
+            Some(Callback::Code(code)) => {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nReturn to the openProfiler window where you started this sign-in.");
+                break code;
+            }
+            Some(Callback::Rejected) => {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nCompany sign-in did not complete. Return to openProfiler to try again.");
+                return Err("The identity provider declined sign-in. Try signing in again.".into());
+            }
+            None => {
+                let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nThis tab does not match the current sign-in. Return to openProfiler and reopen the browser.");
+            }
         }
-        let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
     };
     #[derive(Deserialize)]
     struct Token {
@@ -1019,8 +1076,26 @@ fn browser_login(config: &Config, current: impl Fn() -> bool) -> Result<String, 
     Ok(grant.access_token)
 }
 
-fn callback_code(request: &str, expected_state: &str) -> Option<String> {
-    let mut parts = request.split(' ');
+#[derive(Debug, PartialEq, Eq)]
+enum Callback {
+    Code(String),
+    Rejected,
+}
+
+fn read_callback(request: impl Read, expected_state: &str) -> Option<Callback> {
+    let mut line = String::new();
+    BufReader::new(request)
+        .take(8192)
+        .read_line(&mut line)
+        .ok()?;
+    if !line.ends_with('\n') {
+        return None;
+    }
+    parse_callback(line.trim_end(), expected_state)
+}
+
+fn parse_callback(request: &str, expected_state: &str) -> Option<Callback> {
+    let mut parts = request.split_whitespace();
     if parts.next()? != "GET" {
         return None;
     }
@@ -1031,10 +1106,12 @@ fn callback_code(request: &str, expected_state: &str) -> Option<String> {
     let url = Url::parse(&format!("http://localhost{relative}")).ok()?;
     let mut state = None;
     let mut code = None;
+    let mut error = None;
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
             "state" if state.is_none() => state = Some(value),
             "code" if code.is_none() => code = Some(value),
+            "error" if error.is_none() => error = Some(value),
             "state" | "code" | "error" => return None,
             _ => (),
         }
@@ -1042,8 +1119,13 @@ fn callback_code(request: &str, expected_state: &str) -> Option<String> {
     if state.as_deref() != Some(expected_state) {
         return None;
     }
-    code.filter(|code| !code.is_empty() && code.len() <= 4096)
-        .map(|code| code.into_owned())
+    match (code, error) {
+        (Some(code), None) if !code.is_empty() && code.len() <= 4096 => {
+            Some(Callback::Code(code.into_owned()))
+        }
+        (None, Some(error)) if !error.is_empty() => Some(Callback::Rejected),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1257,19 +1339,47 @@ mod tests {
     #[test]
     fn callback_requires_the_exact_path_and_state() {
         assert_eq!(
-            callback_code("GET /callback?code=one&state=ok HTTP/1.1", "ok").as_deref(),
-            Some("one")
+            parse_callback("GET /callback?code=one&state=ok HTTP/1.1", "ok"),
+            Some(Callback::Code("one".into()))
         );
         assert_eq!(
-            callback_code("GET /callback?code=one&state=wrong HTTP/1.1", "ok"),
+            parse_callback("GET /callback?code=one&state=wrong HTTP/1.1", "ok"),
             None
         );
         assert_eq!(
-            callback_code("GET /callback?code=one&state=ok&state=ok HTTP/1.1", "ok"),
+            parse_callback("GET /callback?code=one&state=ok&state=ok HTTP/1.1", "ok"),
             None
         );
         assert_eq!(
-            callback_code("GET /another?code=one&state=ok HTTP/1.1", "ok"),
+            parse_callback("GET /another?code=one&state=ok HTTP/1.1", "ok"),
+            None
+        );
+    }
+
+    #[test]
+    fn reads_a_callback_split_across_multiple_reads() {
+        let first = b"GET /callback?code=second&sta";
+        let rest = b"te=window-b HTTP/1.1\r\nHost: 127.0.0.1\r\n";
+        assert_eq!(
+            read_callback(first.as_slice().chain(rest.as_slice()), "window-b"),
+            Some(Callback::Code("second".into()))
+        );
+        assert_eq!(
+            read_callback(first.as_slice().chain(rest.as_slice()), "window-a"),
+            None
+        );
+    }
+
+    #[test]
+    fn reports_provider_denials_only_for_the_matching_attempt() {
+        let denied = "GET /callback?error=access_denied&state=second HTTP/1.1";
+        assert_eq!(parse_callback(denied, "second"), Some(Callback::Rejected));
+        assert_eq!(parse_callback(denied, "first"), None);
+        assert_eq!(
+            parse_callback(
+                "GET /callback?code=one&error=denied&state=second HTTP/1.1",
+                "second"
+            ),
             None
         );
     }

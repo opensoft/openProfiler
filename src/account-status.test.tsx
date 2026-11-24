@@ -52,6 +52,44 @@ afterEach(async () => {
 });
 
 describe("company accounts", () => {
+  it("can reopen or cancel a pending sign-in and ignores its late error", async () => {
+    const signedOut = {
+      ...inventory("active"),
+      signed_in: false,
+      accounts: [],
+    };
+    let rejectSignIn!: (reason: string) => void;
+    native.mockImplementation((command) => {
+      switch (command) {
+        case "company_accounts":
+          return Promise.resolve(signedOut);
+        case "company_sign_in":
+          return new Promise((_, reject) => {
+            rejectSignIn = reject;
+          });
+        case "company_reopen_sign_in":
+        case "company_sign_out":
+          return Promise.resolve();
+        default:
+          throw new Error(command);
+      }
+    });
+    await act(async () =>
+      root.render(<CompanyAccounts profiles={[]} desktopActivePaths={[]} />),
+    );
+    await act(async () => button("Sign in to company").click());
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      "Waiting for sign-in",
+    );
+    await act(async () => button("Open browser again").click());
+    expect(native).toHaveBeenCalledWith("company_reopen_sign_in");
+    await act(async () => button("Cancel sign-in").click());
+    expect(native).toHaveBeenCalledWith("company_sign_out");
+    await act(async () => rejectSignIn("The first browser tab timed out"));
+    expect(button("Sign in to company").disabled).toBe(false);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it.each(["transport error", "malformed acknowledgement"])(
     "retries a pause with the same request and revision after a %s",
     async (failure) => {

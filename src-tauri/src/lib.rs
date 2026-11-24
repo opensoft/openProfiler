@@ -316,6 +316,7 @@ pub fn run() {
             account_status::company_accounts,
             account_status::company_set_status,
             account_status::company_sign_in,
+            account_status::company_reopen_sign_in,
             account_status::company_select,
             account_status::company_sign_out,
             activate_profile,

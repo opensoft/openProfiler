@@ -154,6 +154,120 @@ code {
   box-shadow: 0 0 14px #65e6c4;
 }
 
+.company-accounts {
+  display: grid;
+  gap: 12px;
+  margin: 34px 0 24px;
+  padding: 18px 22px;
+  border: 1px solid #244358;
+  border-radius: 15px;
+  background: #0b1e2c;
+}
+
+.company-accounts__header,
+.company-accounts__actions,
+.company-accounts__account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.company-accounts__header,
+.company-accounts__account {
+  justify-content: space-between;
+}
+
+.company-accounts h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 1.2rem;
+}
+
+.company-accounts :is(p, select) {
+  margin: 0;
+  color: #bdcfdd;
+  font-size: 0.875rem;
+}
+
+.company-accounts [role="alert"] {
+  color: #ffb9ad;
+}
+
+.company-accounts label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.company-accounts select {
+  max-width: 100%;
+  padding: 7px 9px;
+  border: 1px solid #45677b;
+  border-radius: 7px;
+  background: #102b3d;
+  color: #eaf4ff;
+}
+
+.company-accounts .button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border-color: #52758a;
+  background: #18374a;
+  color: #edf6ff;
+  font-size: 0.875rem;
+}
+
+.company-accounts .button--primary {
+  border-color: #63bdab;
+  background: #15594d;
+}
+
+.company-accounts .button:not(:disabled):hover {
+  background: #244d64;
+}
+
+.company-accounts .button:disabled {
+  border-color: #385366;
+  background: #102635;
+  color: #a5b6c3;
+}
+
+.company-accounts :is(button, select):focus-visible {
+  outline: 2px solid #65e6c4;
+  outline-offset: 2px;
+}
+
+.company-accounts__list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.company-accounts__account {
+  padding: 12px 0 0;
+  border-top: 1px solid #244358;
+}
+
+.company-accounts__account + .company-accounts__account {
+  margin-top: 12px;
+}
+
+.company-accounts__details {
+  display: grid;
+  flex: 1 1 15rem;
+  min-width: 0;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.company-accounts__details span {
+  color: #bdcfdd;
+  font-size: 0.875rem;
+}
+
 .summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(95px, 1fr)) minmax(150px, auto);
